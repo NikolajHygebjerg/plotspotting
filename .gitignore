@@ -1,0 +1,10 @@
+.DS_Store
+app/.env.json
+app/.env
+app/assets/env.json
+supabase/.temp/
+app/build/
+app/.dart_tool/
+app/.flutter-plugins-dependencies
+build/
+dist/
