@@ -1,4 +1,4 @@
-# Event Map
+# Plotspotting
 
 Kort- og navigationsapp til events (messer, spejderlejre, festivaler). Arrangører tegner stier og punkter; besøgende søger og får gå-ruter langs **de mappede stier** — ikke vej-navigation.
 
@@ -6,23 +6,23 @@ Kort- og navigationsapp til events (messer, spejderlejre, festivaler). Arrangør
 
 | Lag | Teknologi |
 |-----|-----------|
-| App | Flutter (iOS + Android) |
+| App | Flutter (iOS + Android + Web) |
 | Kort udendørs | MapLibre + OpenStreetMap |
 | Kort indendørs | Custom plantegning (Etape 2) |
 | Backend | Supabase (Postgres + PostGIS + Storage) |
 | Routing | Egen graf (A* på arrangør-tegnede stier) |
+| Web deploy | Vercel → [plotspotting.vercel.app](https://plotspotting.vercel.app) |
 
 ## Dokumentation
 
 - [Datamodel](docs/DATA_MODEL.md) — tabeller, graf-struktur, API-kontrakter
 - [Friland testcase](docs/FRILAND.md) — økosamfund: huse, stier, gæsteguide
-- [Wireframes (canvas)](/Users/nikolajhygebjerg/.cursor/projects/Users-nikolajhygebjerg-Mapping/canvases/etape-1-wireframes.canvas.tsx) — visuel oversigt
+- [Vercel deploy](docs/VERCEL.md) — web-hosting og embed
+- [Supabase-opsætning](docs/SUPABASE_SETUP.md) — database og migrationer
 
 ## Database
 
 SQL-migrationer ligger i `supabase/migrations/`.
-
-Se **[Supabase-opsætning](docs/SUPABASE_SETUP.md)** for link til projektet og kørsel af migrationer.
 
 ```bash
 supabase login
