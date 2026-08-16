@@ -140,7 +140,12 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         accuracy: LocationAccuracy.best,
         distanceFilter: 3,
       ),
-    ).listen(_onGpsUpdate);
+    ).listen(
+      _onGpsUpdate,
+      onError: (_) {
+        if (mounted) setState(() => _isRecording = false);
+      },
+    );
 
     final current = await Geolocator.getCurrentPosition();
     _onGpsUpdate(current);
@@ -1845,8 +1850,18 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _section.index,
-        onDestinationSelected: (index) =>
-            _onSectionChanged(EditorSection.values[index]),
+        onDestinationSelected: (index) {
+          final section = EditorSection.values[index];
+          if (section == EditorSection.audioTour) {
+            _openAudioTourEditor();
+            return;
+          }
+          if (section == EditorSection.treasureHunt) {
+            _openTreasureHuntEditor();
+            return;
+          }
+          _onSectionChanged(section);
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.route_outlined),

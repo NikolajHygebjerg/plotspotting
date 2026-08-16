@@ -98,6 +98,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   static const _basemapBelowLayerId = 'water';
 
   MapLibreMapController? _controller;
+  bool _disposed = false;
   bool _styleReady = false;
   bool _basemapReady = false;
   String? _loadedBasemapUrl;
@@ -212,9 +213,22 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     return true;
   }
 
+  bool get _isActive => mounted && !_disposed;
+
   @override
   void dispose() {
+    _disposed = true;
     _removeDragListener();
+    final controller = _controller;
+    _controller = null;
+    if (controller != null) {
+      try {
+        controller.onSymbolTapped.remove(_handleSymbolTapped);
+        controller.onCircleTapped.remove(_handleCircleTapped);
+      } on Object {
+        // Native map may already be torn down.
+      }
+    }
     super.dispose();
   }
 
@@ -251,19 +265,33 @@ class _EventMapWidgetState extends State<EventMapWidget> {
 
     for (final entry in _poiSymbols.entries) {
       if (entry.value.id == id || entry.value == annotation) {
-        final poi = widget.data.pois.firstWhere((p) => p.id == entry.key);
-        widget.onPoiMoved?.call(poi, current);
+        final poi = _findPoi(entry.key);
+        if (poi != null) widget.onPoiMoved?.call(poi, current);
         return;
       }
     }
 
     for (final entry in _vertexCircles.entries) {
       if (entry.value.id == id || entry.value == annotation) {
-        final vertex = widget.data.vertices.firstWhere((v) => v.id == entry.key);
-        widget.onVertexMoved?.call(vertex, current);
+        final vertex = _findVertex(entry.key);
+        if (vertex != null) widget.onVertexMoved?.call(vertex, current);
         return;
       }
     }
+  }
+
+  MapPoi? _findPoi(String id) {
+    for (final poi in widget.data.pois) {
+      if (poi.id == id) return poi;
+    }
+    return null;
+  }
+
+  MapVertex? _findVertex(String id) {
+    for (final vertex in widget.data.vertices) {
+      if (vertex.id == id) return vertex;
+    }
+    return null;
   }
 
   Future<void> _clearPreviewAnnotations() async {
@@ -401,6 +429,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   }
 
   Future<void> _syncRouteOnly() async {
+    if (!_isActive) return;
     if (_useFlutterRouteOverlay) {
       await _routeOverlayKey.currentState?.updatePositions();
       return;
@@ -411,6 +440,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     } else {
       await _drawRoute(widget.routePoints);
     }
+    if (!_isActive) return;
 
     if (widget.previewLines.isEmpty && widget.connectionPoints.isEmpty) {
       await _clearPreviewAnnotations();
@@ -613,7 +643,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     if (_basemapReady && _loadedBasemapUrl == url) return;
 
     final response = await http.get(Uri.parse(url));
-    if (response.statusCode != 200 || !mounted) return;
+    if (!_isActive || response.statusCode != 200) return;
 
     final quad = event.bounds!.toLatLngQuad();
     final bytes = response.bodyBytes;
@@ -642,11 +672,13 @@ class _EventMapWidgetState extends State<EventMapWidget> {
             await controller.addImageLayer(_basemapLayerId, _basemapSourceId);
           }
           _basemapReady = true;
-        } else {
-          rethrow;
         }
+      } on Object {
+        // Skip basemap if native map rejects the image — avoid crashing the app.
+        return;
       }
     }
+    if (!_isActive) return;
     _loadedBasemapUrl = url;
   }
 
@@ -674,11 +706,18 @@ class _EventMapWidgetState extends State<EventMapWidget> {
 
   /// Re-draw paths and POI pins on top of the basemap layer.
   Future<void> _syncMapContent() async {
-    await _syncBasemap();
-    await _syncAnnotations();
+    if (!_isActive) return;
+    try {
+      await _syncBasemap();
+      if (!_isActive) return;
+      await _syncAnnotations();
+    } on Object {
+      // Map may be disposed mid-sync after navigation pop.
+    }
   }
 
   Future<void> _syncAnnotations() async {
+    if (!_isActive) return;
     final controller = _controller;
     if (controller == null || !_styleReady) return;
 
@@ -821,16 +860,16 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   void _handleCircleTapped(Circle circle) {
     for (final entry in _poiCircles.entries) {
       if (entry.value == circle) {
-        final poi = widget.data.pois.firstWhere((p) => p.id == entry.key);
-        widget.onPoiTapped?.call(poi);
+        final poi = _findPoi(entry.key);
+        if (poi != null) widget.onPoiTapped?.call(poi);
         return;
       }
     }
 
     for (final entry in _vertexCircles.entries) {
       if (entry.value == circle) {
-        final vertex = widget.data.vertices.firstWhere((v) => v.id == entry.key);
-        widget.onVertexTapped?.call(vertex);
+        final vertex = _findVertex(entry.key);
+        if (vertex != null) widget.onVertexTapped?.call(vertex);
         return;
       }
     }
@@ -839,15 +878,15 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   void _handleSymbolTapped(Symbol symbol) {
     for (final entry in _poiSymbols.entries) {
       if (entry.value == symbol) {
-        final poi = widget.data.pois.firstWhere((p) => p.id == entry.key);
-        widget.onPoiTapped?.call(poi);
+        final poi = _findPoi(entry.key);
+        if (poi != null) widget.onPoiTapped?.call(poi);
         return;
       }
     }
     for (final entry in _poiLabelSymbols.entries) {
       if (entry.value == symbol) {
-        final poi = widget.data.pois.firstWhere((p) => p.id == entry.key);
-        widget.onPoiTapped?.call(poi);
+        final poi = _findPoi(entry.key);
+        if (poi != null) widget.onPoiTapped?.call(poi);
         return;
       }
     }
@@ -890,17 +929,22 @@ class _EventMapWidgetState extends State<EventMapWidget> {
             }
           },
           onStyleLoadedCallback: () async {
-            _styleReady = true;
-            _basemapReady = false;
-            _loadedBasemapUrl = null;
-            await _syncMapContent();
-            if (_useEventBounds) {
-              await _fitToEventBounds();
+            if (_disposed) return;
+            try {
+              _styleReady = true;
+              _basemapReady = false;
+              _loadedBasemapUrl = null;
+              await _syncMapContent();
+              if (_useEventBounds && _isActive) {
+                await _fitToEventBounds();
+              }
+              if (_isActive) {
+                await Future<void>.delayed(const Duration(milliseconds: 100));
+              }
+              if (_isActive) _updateOverlayPositions();
+            } on Object {
+              // Ignore sync failures when map is torn down.
             }
-            if (mounted) {
-              await Future<void>.delayed(const Duration(milliseconds: 100));
-            }
-            _updateOverlayPositions();
           },
           onCameraMove: (_) => _updateOverlayPositions(),
           onMapIdle: _updateOverlayPositions,

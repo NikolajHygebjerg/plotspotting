@@ -131,6 +131,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _mapController = null;
     _searchDebouncer.dispose();
     _audioTourController?.dispose();
     _searchController.dispose();
@@ -145,7 +146,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
   Future<void> _startTracking() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      setState(() => _status = 'GPS er slået fra');
+      if (mounted) setState(() => _status = 'GPS er slået fra');
       return;
     }
 
@@ -155,16 +156,23 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      setState(() => _status = 'Ingen adgang til placering');
+      if (mounted) setState(() => _status = 'Ingen adgang til placering');
       return;
     }
 
+    await _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,
         distanceFilter: 5,
       ),
-    ).listen(_onPosition);
+    ).listen(
+      _onPosition,
+      onError: (_) {
+        if (!mounted) return;
+        setState(() => _status = 'Placeringsfejl — prøv igen');
+      },
+    );
 
     try {
       final current = await Geolocator.getCurrentPosition(
@@ -313,6 +321,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   }
 
   void _updateTurnByTurn(Position position) {
+    if (!mounted) return;
     if (_routePoints.length < 2) {
       setState(() {});
       return;
@@ -327,6 +336,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       userHeading: heading,
     );
 
+    if (!mounted) return;
     setState(() => _instruction = instruction);
     _updateNavigationCamera(position, instruction);
   }
@@ -336,18 +346,22 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     NavigationInstruction? instruction,
   ) async {
     final controller = _mapController;
-    if (controller == null || instruction == null) return;
+    if (controller == null || instruction == null || !mounted) return;
 
-    await controller.animateCamera(
-      CameraUpdate.newCameraPosition(
-        CameraPosition(
-          target: LatLng(position.latitude, position.longitude),
-          zoom: 17.5,
-          bearing: instruction.mapBearing,
-          tilt: 0,
+    try {
+      await controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(position.latitude, position.longitude),
+            zoom: 17.5,
+            bearing: instruction.mapBearing,
+            tilt: 0,
+          ),
         ),
-      ),
-    );
+      );
+    } on Object {
+      // Native map may be gone after leaving the screen.
+    }
   }
 
   void _submitSearch() {
@@ -542,6 +556,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
   Future<void> _toggleFavorite(MapPoi poi) async {
     final isFav = await _favoritesStorage.toggle(_data.event.id, poi.id);
+    if (!mounted) return;
     setState(() {
       if (isFav) {
         _favoriteIds.add(poi.id);
@@ -554,27 +569,31 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   Future<void> _recenterOnUser() async {
     final controller = _mapController;
     final location = _userLocation;
-    if (controller == null || location == null) return;
+    if (controller == null || location == null || !mounted) return;
 
-    if (_isNavigating && _instruction != null) {
-      await controller.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: LatLng(location.latitude, location.longitude),
-            zoom: 17.5,
-            bearing: _instruction!.mapBearing,
+    try {
+      if (_isNavigating && _instruction != null) {
+        await controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: LatLng(location.latitude, location.longitude),
+              zoom: 17.5,
+              bearing: _instruction!.mapBearing,
+            ),
           ),
+        );
+        return;
+      }
+
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(location.latitude, location.longitude),
+          AppConstants.defaultZoom,
         ),
       );
-      return;
+    } on Object {
+      // Native map may be gone after leaving the screen.
     }
-
-    await controller.animateCamera(
-      CameraUpdate.newLatLngZoom(
-        LatLng(location.latitude, location.longitude),
-        AppConstants.defaultZoom,
-      ),
-    );
   }
 
   void _onTabChanged(VisitorTab tab) {
@@ -730,14 +749,22 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
   Future<void> _zoomIn() async {
     final controller = _mapController;
-    if (controller == null) return;
-    await controller.animateCamera(CameraUpdate.zoomIn());
+    if (controller == null || !mounted) return;
+    try {
+      await controller.animateCamera(CameraUpdate.zoomIn());
+    } on Object {
+      // Native map may be gone after leaving the screen.
+    }
   }
 
   Future<void> _zoomOut() async {
     final controller = _mapController;
-    if (controller == null) return;
-    await controller.animateCamera(CameraUpdate.zoomOut());
+    if (controller == null || !mounted) return;
+    try {
+      await controller.animateCamera(CameraUpdate.zoomOut());
+    } on Object {
+      // Native map may be gone after leaving the screen.
+    }
   }
 
   EdgeInsets _mapFitPadding(BuildContext context) {

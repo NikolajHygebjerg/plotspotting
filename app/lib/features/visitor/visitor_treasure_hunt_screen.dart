@@ -69,6 +69,7 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _mapController = null;
     super.dispose();
   }
 
@@ -98,16 +99,22 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
         accuracy: LocationAccuracy.best,
         distanceFilter: 3,
       ),
-    ).listen((position) {
-      if (!mounted) return;
-      setState(() {
-        _userLocation = ll.LatLng(position.latitude, position.longitude);
-      });
-      if (_isNavigating && _targetPost != null) {
-        _recomputeRoute(position);
-        _updateTurnByTurn(position);
-      }
-    });
+    ).listen(
+      (position) {
+        if (!mounted) return;
+        setState(() {
+          _userLocation = ll.LatLng(position.latitude, position.longitude);
+        });
+        if (_isNavigating && _targetPost != null) {
+          _recomputeRoute(position);
+          _updateTurnByTurn(position);
+        }
+      },
+      onError: (_) {
+        if (!mounted) return;
+        setState(() => _status = 'Placeringsfejl — prøv igen');
+      },
+    );
   }
 
   void _recomputeRoute(Position position) {
@@ -186,22 +193,36 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
   Future<void> _recenterOnUser() async {
     final controller = _mapController;
     final location = _userLocation;
-    if (controller == null || location == null) return;
+    if (controller == null || location == null || !mounted) return;
 
-    await controller.animateCamera(
-      CameraUpdate.newLatLngZoom(
-        ml.LatLng(location.latitude, location.longitude),
-        17,
-      ),
-    );
+    try {
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          ml.LatLng(location.latitude, location.longitude),
+          17,
+        ),
+      );
+    } on Object {
+      // Native map may be gone after leaving the screen.
+    }
   }
 
   Future<void> _zoomIn() async {
-    await _mapController?.animateCamera(CameraUpdate.zoomIn());
+    if (!mounted) return;
+    try {
+      await _mapController?.animateCamera(CameraUpdate.zoomIn());
+    } on Object {
+      // Ignore if map is gone.
+    }
   }
 
   Future<void> _zoomOut() async {
-    await _mapController?.animateCamera(CameraUpdate.zoomOut());
+    if (!mounted) return;
+    try {
+      await _mapController?.animateCamera(CameraUpdate.zoomOut());
+    } on Object {
+      // Ignore if map is gone.
+    }
   }
 
   void _showPost(TreasureHuntPost post) {

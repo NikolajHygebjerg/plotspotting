@@ -28,9 +28,10 @@ class AudioTourGuidanceController extends ChangeNotifier {
   })  : _data = data,
         _routing = routing ?? RoutingService(),
         _config = config {
-    _player.playerStateStream.listen(_onPlayerState);
-    _player.positionStream.listen((_) => notifyListeners());
-    _player.durationStream.listen((_) => notifyListeners());
+    _subscriptions
+      ..add(_player.playerStateStream.listen(_onPlayerState))
+      ..add(_player.positionStream.listen((_) => notifyListeners()))
+      ..add(_player.durationStream.listen((_) => notifyListeners()));
     _resetTour();
   }
 
@@ -40,6 +41,7 @@ class AudioTourGuidanceController extends ChangeNotifier {
   final RoutingService _routing;
   final AudioTourConfig _config;
   final AudioPlayer _player = AudioPlayer();
+  final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   AudioTourPhase _phase = AudioTourPhase.navigateToStop;
   int _poiStopIndex = 0;
@@ -249,6 +251,10 @@ class AudioTourGuidanceController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final subscription in _subscriptions) {
+      subscription.cancel();
+    }
+    _subscriptions.clear();
     _player.dispose();
     super.dispose();
   }
