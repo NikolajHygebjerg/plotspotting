@@ -11,11 +11,13 @@ class VisitorAudioTourPickerScreen extends StatelessWidget {
     required this.mapData,
     this.onTourSelected,
     this.embed = false,
+    this.organizerPreview = false,
   });
 
   final EventMapData mapData;
   final ValueChanged<AudioTourConfig>? onTourSelected;
   final bool embed;
+  final bool organizerPreview;
 
   void _openTour(BuildContext context, AudioTourConfig tour) {
     if (onTourSelected != null) {
@@ -30,6 +32,8 @@ class VisitorAudioTourPickerScreen extends StatelessWidget {
           mapData: mapData,
           experience: VisitorExperience.audioTour,
           audioTourConfig: tour,
+          embed: embed,
+          organizerPreview: organizerPreview,
         ),
       ),
     );
