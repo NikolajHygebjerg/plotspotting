@@ -35,11 +35,32 @@ extension PoiTopicLabels on PoiTopic {
 }
 
 extension MapPoiTopicContent on MapPoi {
-  bool get hasAddressTopic =>
-      houseNumber != null && houseNumber!.trim().isNotEmpty;
+  String? get resolvedHouseNumber {
+    final direct = houseNumber?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final label = name.trim();
+    if (label.isEmpty || label == 'Sted') return null;
+
+    final dotted = RegExp(r'^(\d+)\s*[·•]\s*').firstMatch(label);
+    if (dotted != null) return dotted.group(1);
+
+    final numbered = RegExp(r'^Nr\.?\s*(\d+)', caseSensitive: false).firstMatch(label);
+    if (numbered != null) return numbered.group(1);
+
+    if (RegExp(r'^\d+$').hasMatch(label)) return label;
+    return null;
+  }
+
+  bool get hasAddressTopic {
+    final number = resolvedHouseNumber;
+    return number != null && number.isNotEmpty;
+  }
 
   bool get hasNameTopic =>
-      occupants.isNotEmpty || (name.trim().isNotEmpty && name.trim() != 'Sted');
+      occupants.isNotEmpty ||
+      (name.trim().isNotEmpty && name.trim() != 'Sted') ||
+      (primaryOccupantName != null && primaryOccupantName!.trim().isNotEmpty);
 
   bool get hasInfoTopic =>
       (description != null && description!.trim().isNotEmpty) || hasVisualMedia;
@@ -72,8 +93,9 @@ extension MapPoiTopicContent on MapPoi {
 
   String get addressTopicText {
     final parts = <String>[];
-    if (houseNumber != null && houseNumber!.trim().isNotEmpty) {
-      parts.add(houseNumber!.trim());
+    final number = resolvedHouseNumber;
+    if (number != null && number.isNotEmpty) {
+      parts.add(number);
     }
     if (name.trim().isNotEmpty &&
         name.trim() != 'Sted' &&

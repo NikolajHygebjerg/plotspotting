@@ -269,7 +269,9 @@ class MapPoi {
       description: description,
       accessVertexId: json['access_vertex_id'] as String?,
       sortOrder: (json['sort_order'] as num?)?.toInt() ?? 0,
-      houseNumber: normalized['house_number'] as String?,
+      houseNumber: _readMetadataString(normalized['house_number']) ??
+          _readMetadataString(normalized['houseNumber']) ??
+          _houseNumberFromDisplayName(name),
       occupants: _occupantsFromMetadata(normalized),
       searchKeywords: normalized['search_keywords'] as String?,
       media: _mediaFromMetadata(normalized),
@@ -305,11 +307,16 @@ class MapPoi {
 
     final address = topicsMap['address'];
     if (address is Map) {
-      final houseNumber = Map<String, dynamic>.from(address)['house_number'] as String?;
+      final houseNumber = _readMetadataString(
+        Map<String, dynamic>.from(address)['house_number'] ??
+            Map<String, dynamic>.from(address)['houseNumber'],
+      );
       if (houseNumber != null &&
-          houseNumber.trim().isNotEmpty &&
-          (normalized['house_number'] as String?)?.trim().isNotEmpty != true) {
-        normalized['house_number'] = houseNumber.trim();
+          (_readMetadataString(normalized['house_number']) ??
+                  _readMetadataString(normalized['houseNumber']))
+              ?.isNotEmpty !=
+              true) {
+        normalized['house_number'] = houseNumber;
       }
     }
 
@@ -369,6 +376,26 @@ class MapPoi {
     addItems(existing);
     addItems(extra);
     return merged;
+  }
+
+  static String? _readMetadataString(Object? value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
+  }
+
+  static String? _houseNumberFromDisplayName(String name) {
+    final label = name.trim();
+    if (label.isEmpty || label == 'Sted') return null;
+
+    final dotted = RegExp(r'^(\d+)\s*[·•]\s*').firstMatch(label);
+    if (dotted != null) return dotted.group(1);
+
+    final numbered = RegExp(r'^Nr\.?\s*(\d+)', caseSensitive: false).firstMatch(label);
+    if (numbered != null) return numbered.group(1);
+
+    if (RegExp(r'^\d+$').hasMatch(label)) return label;
+    return null;
   }
 
   static List<PoiMedia> _mediaFromMetadata(Map<String, dynamic> metaMap) {

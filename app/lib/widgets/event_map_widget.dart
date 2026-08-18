@@ -588,29 +588,42 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     final pinRadius = isDestination
         ? 16.0
         : isInteractive
-            ? (_useIllustratedBasemap ? 13.0 : 14.0)
+            ? (_useIllustratedBasemap ? 15.0 : 14.0)
             : 8.0;
+    final pinOpacity = isDestination || selected
+        ? 0.95
+        : isInteractive
+            ? (_useIllustratedBasemap ? 0.92 : 0.25)
+            : 0.25;
     final circle = await controller.addCircle(
       CircleOptions(
         geometry: LatLng(poi.lat, poi.lng),
         circleRadius: pinRadius,
         circleColor: pinColor,
-        circleOpacity: isDestination || selected ? 0.95 : 0.25,
+        circleOpacity: pinOpacity,
         circleStrokeWidth: isInteractive ? 3.5 : 2.5,
         circleStrokeColor: '#FFFFFF',
       ),
     );
     _poiCircles[poi.id] = circle;
 
+    final pinLabel = poi.mapPinLabel.trim();
+    final showHouseLabel = _useIllustratedBasemap &&
+        isInteractive &&
+        pinLabel.isNotEmpty &&
+        pinLabel.length <= 8;
+
     final symbol = await controller.addSymbol(
       SymbolOptions(
         geometry: LatLng(poi.lat, poi.lng),
-        textField: poi.mapPinIcon,
+        textField: showHouseLabel ? pinLabel : poi.mapPinIcon,
         fontNames: AppConstants.poiMapFontStack,
-        textSize: isDestination ? 24 : (isInteractive ? (_useIllustratedBasemap ? 18 : 22) : 16),
+        textSize: isDestination
+            ? 24
+            : (isInteractive ? (_useIllustratedBasemap ? 14 : 22) : 16),
         textColor: '#FFFFFF',
         textHaloColor: pinColor,
-        textHaloWidth: isInteractive ? 2.2 : 1.6,
+        textHaloWidth: isInteractive ? 2.4 : 1.6,
         zIndex: 20,
         draggable: widget.poiDraggable,
       ),

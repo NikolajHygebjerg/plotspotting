@@ -121,14 +121,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     return _data;
   }
 
-  List<MapPoi> get _visiblePois {
-    if (!_showTopicFilters) return _displayData.pois;
-    return _displayData.pois
-        .where((poi) => poi.matchesActiveTopics(_activeTopics))
-        .toList();
-  }
-
-  EventMapData get _mapDisplayData => _displayData.copyWith(pois: _visiblePois);
+  EventMapData get _mapDisplayData => _displayData;
 
   @override
   void initState() {
