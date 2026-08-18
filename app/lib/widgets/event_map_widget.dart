@@ -170,11 +170,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   bool get _useIllustratedBasemap =>
       widget.showIllustratedBasemap && widget.data.event.hasIllustratedBasemap;
 
-  /// Brug neutral baggrund for gæstekort med tegning — undgå stilskift på web
-  /// når overlay er loadet (det nulstiller ellers kortet).
-  /// På web bruges OSM under overlayet — addImageSource virker ikke i browseren.
+  /// Neutral baggrund — gæster ser kun det illustrerede kort (ingen OSM under).
   bool get _useBlankMapStyle =>
-      widget.illustratedMapOnly && _useIllustratedBasemap && !kIsWeb;
+      widget.illustratedMapOnly && _useIllustratedBasemap;
 
   @override
   void didUpdateWidget(covariant EventMapWidget oldWidget) {
