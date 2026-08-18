@@ -45,6 +45,7 @@ class EventMapWidget extends StatefulWidget {
     this.onVertexMoved,
     this.onMapCreated,
     this.onCameraMove,
+    this.onCameraTrackingDismissed,
     this.constrainToEventBounds = false,
     this.cameraFitBounds,
     this.boundsFitPadding,
@@ -80,6 +81,7 @@ class EventMapWidget extends StatefulWidget {
   final void Function(MapVertex vertex, LatLng coordinate)? onVertexMoved;
   final void Function(MapLibreMapController controller)? onMapCreated;
   final VoidCallback? onCameraMove;
+  final VoidCallback? onCameraTrackingDismissed;
   /// When true, pan/zoom is limited to [EventMeta.bounds] and the camera fits that area.
   final bool constrainToEventBounds;
   /// When set, initial camera + fit use these bounds instead of [EventMeta.navigationBounds].
@@ -985,6 +987,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               // Ignore sync failures when map is torn down.
             }
           },
+          onCameraTrackingDismissed: widget.onCameraTrackingDismissed,
           onCameraMove: (_) {
             _updateOverlayPositions();
             widget.onCameraMove?.call();
