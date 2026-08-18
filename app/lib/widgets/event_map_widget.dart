@@ -17,6 +17,7 @@ import '../data/models/map_edge.dart';
 import '../data/models/map_poi.dart';
 import '../data/models/map_vertex.dart';
 import 'route_dots_overlay.dart';
+import 'user_location_overlay.dart';
 
 class EventMapWidget extends StatefulWidget {
   const EventMapWidget({
@@ -29,6 +30,9 @@ class EventMapWidget extends StatefulWidget {
     this.myLocationEnabled = false,
     this.myLocationRenderMode = MyLocationRenderMode.normal,
     this.myLocationTrackingMode = MyLocationTrackingMode.none,
+    this.userLocation,
+    this.userHeading,
+    this.userLocationNavigating = false,
     this.showEventPaths = true,
     this.showPathVertices = true,
     this.showIllustratedBasemap = true,
@@ -65,6 +69,9 @@ class EventMapWidget extends StatefulWidget {
   final bool myLocationEnabled;
   final MyLocationRenderMode myLocationRenderMode;
   final MyLocationTrackingMode myLocationTrackingMode;
+  final ll.LatLng? userLocation;
+  final double? userHeading;
+  final bool userLocationNavigating;
   final bool showEventPaths;
   final bool showPathVertices;
   final bool showIllustratedBasemap;
@@ -118,6 +125,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   final _vertexCircles = <String, Circle>{};
   OnFeatureDragCallback? _dragCallback;
   final _routeOverlayKey = GlobalKey<RouteDotsOverlayState>();
+  final _userLocationOverlayKey = GlobalKey<UserLocationOverlayState>();
   final _overlayPositionThrottler = Throttler(const Duration(milliseconds: 80));
   Line? _routeLine;
   Line? _previewLine;
@@ -137,7 +145,11 @@ class _EventMapWidgetState extends State<EventMapWidget> {
       _useIllustratedBasemap && widget.showPoiMarkers && widget.onPoiTapped != null;
 
   bool get _trackCameraForOverlays =>
-      _useFlutterRouteOverlay || _useZoomDependentPoiPins;
+      _useFlutterRouteOverlay ||
+      _useZoomDependentPoiPins ||
+      widget.userLocation != null;
+
+  bool get _useCustomUserLocation => widget.userLocation != null;
 
   bool get _poiOverviewMode =>
       _useZoomDependentPoiPins &&
@@ -223,8 +235,14 @@ class _EventMapWidgetState extends State<EventMapWidget> {
       unawaited(_fitToEventBounds());
     }
     if (oldWidget.myLocationTrackingMode != widget.myLocationTrackingMode &&
-        widget.myLocationEnabled) {
+        widget.myLocationEnabled &&
+        !_useCustomUserLocation) {
       _controller?.updateMyLocationTrackingMode(widget.myLocationTrackingMode);
+    }
+    if (oldWidget.userLocation != widget.userLocation ||
+        oldWidget.userHeading != widget.userHeading ||
+        oldWidget.userLocationNavigating != widget.userLocationNavigating) {
+      _userLocationOverlayKey.currentState?.updatePosition();
     }
   }
 
@@ -949,12 +967,18 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     if (_useFlutterRouteOverlay) {
       await _routeOverlayKey.currentState?.updatePositions();
     }
+    if (_useCustomUserLocation) {
+      await _userLocationOverlayKey.currentState?.updatePosition();
+    }
   }
 
   void _updateOverlayPositions() {
     _overlayPositionThrottler.run(() {
       if (_useFlutterRouteOverlay) {
         _routeOverlayKey.currentState?.updatePositions();
+      }
+      if (_useCustomUserLocation) {
+        _userLocationOverlayKey.currentState?.updatePosition();
       }
     });
   }
@@ -1054,7 +1078,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
         ? navigationBounds.toCameraTargetBounds()
         : CameraTargetBounds.unbounded;
 
-    final locationEnabled = widget.myLocationEnabled;
+    final locationEnabled = widget.myLocationEnabled && !_useCustomUserLocation;
     final locationRenderMode = locationEnabled
         ? widget.myLocationRenderMode
         : MyLocationRenderMode.normal;
@@ -1127,6 +1151,18 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               key: _routeOverlayKey,
               controller: _controller!,
               routePoints: widget.routePoints,
+            ),
+          ),
+        if (_useCustomUserLocation && _controller != null)
+          Positioned.fill(
+            child: UserLocationOverlay(
+              key: _userLocationOverlayKey,
+              controller: _controller!,
+              location: widget.userLocation,
+              heading: widget.userHeading,
+              mode: widget.userLocationNavigating
+                  ? UserLocationDisplayMode.navigating
+                  : UserLocationDisplayMode.exploring,
             ),
           ),
       ],
