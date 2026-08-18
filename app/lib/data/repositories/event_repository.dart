@@ -346,19 +346,54 @@ class EventRepository {
       params: {'p_slug': slug},
     );
     if (response == null) return null;
-    return EventMeta.fromJson(Map<String, dynamic>.from(response as Map));
+
+    final metaJson = Map<String, dynamic>.from(response as Map);
+    await _mergePublishedMetadataFromTable(slug, metaJson);
+    return EventMeta.fromJson(metaJson);
+  }
+
+  /// Older Supabase deployments omit [metadata] from [get_event_meta_by_slug].
+  Future<void> _mergePublishedMetadataFromTable(
+    String slug,
+    Map<String, dynamic> metaJson,
+  ) async {
+    final existing = metaJson['metadata'];
+    if (existing is Map && existing.isNotEmpty) return;
+
+    final row = await _client
+        .from('events')
+        .select('metadata, status')
+        .eq('public_slug', slug)
+        .eq('status', 'published')
+        .maybeSingle();
+    if (row == null) return;
+
+    final metadata = row['metadata'];
+    if (metadata is Map && metadata.isNotEmpty) {
+      metaJson['metadata'] = metadata;
+    }
+    metaJson['status'] ??= row['status'];
   }
 
   Future<EventMapData?> loadPublishedBySlug(String slug) async {
     final normalizedSlug = slug.trim().toLowerCase();
     if (normalizedSlug.isEmpty) return null;
 
-    final meta = await getPublishedMeta(normalizedSlug);
+    final data = await _loadPublishedBySlugOnce(normalizedSlug);
+    if (data == null) return null;
+    if (data.hasAudioTour || data.hasTreasureHunt) return data;
+
+    // Published again under slug-2 when an older publish kept the canonical slug.
+    return _loadPublishedBySlugOnce('$normalizedSlug-2') ?? data;
+  }
+
+  Future<EventMapData?> _loadPublishedBySlugOnce(String slug) async {
+    final meta = await getPublishedMeta(slug);
     if (meta == null) return null;
 
     final graphResponse = await _client.rpc(
       'get_event_graph_by_slug',
-      params: {'p_slug': normalizedSlug},
+      params: {'p_slug': slug},
     );
     if (graphResponse == null) return null;
 
@@ -367,7 +402,7 @@ class EventRepository {
         : Map<String, dynamic>.from(graphResponse as Map);
 
     return EventMapData.fromPublishedGraph(
-      event: meta.copyWith(status: 'published', publicSlug: normalizedSlug),
+      event: meta.copyWith(status: 'published', publicSlug: slug),
       graph: graph,
     );
   }
