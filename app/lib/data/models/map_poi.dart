@@ -243,21 +243,114 @@ class MapPoi {
   factory MapPoi.fromJson(Map<String, dynamic> json) {
     final metadata = json['metadata'];
     final metaMap = metadata is Map ? Map<String, dynamic>.from(metadata) : <String, dynamic>{};
+    final normalized = _normalizeMetadataFromTopics(metaMap);
+
+    var name = json['name'] as String? ?? '';
+    final nickname = normalized.remove('_nickname') as String?;
+    if (name.trim().isEmpty || name.trim() == 'Sted') {
+      if (nickname != null && nickname.isNotEmpty) {
+        name = nickname;
+      }
+    }
+
+    var description = json['description'] as String?;
+    final topicDescription = normalized.remove('_description') as String?;
+    if (description == null || description.trim().isEmpty) {
+      description = topicDescription;
+    }
 
     return MapPoi(
       id: json['id'] as String,
-      name: json['name'] as String,
+      name: name,
       category: json['category'] as String? ?? 'other',
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
-      description: json['description'] as String?,
+      description: description,
       accessVertexId: json['access_vertex_id'] as String?,
       sortOrder: (json['sort_order'] as num?)?.toInt() ?? 0,
-      houseNumber: metaMap['house_number'] as String?,
-      occupants: _occupantsFromMetadata(metaMap),
-      searchKeywords: metaMap['search_keywords'] as String?,
-      media: _mediaFromMetadata(metaMap),
+      houseNumber: normalized['house_number'] as String?,
+      occupants: _occupantsFromMetadata(normalized),
+      searchKeywords: normalized['search_keywords'] as String?,
+      media: _mediaFromMetadata(normalized),
     );
+  }
+
+  /// Backend gemmer emne-data i `metadata.topics` — hydrér flade felter ved load.
+  static Map<String, dynamic> _normalizeMetadataFromTopics(
+    Map<String, dynamic> metaMap,
+  ) {
+    final normalized = Map<String, dynamic>.from(metaMap);
+    final topics = normalized['topics'];
+    if (topics is! Map) return normalized;
+
+    final topicsMap = Map<String, dynamic>.from(topics);
+
+    final address = topicsMap['address'];
+    if (address is Map) {
+      final houseNumber = Map<String, dynamic>.from(address)['house_number'] as String?;
+      if (houseNumber != null &&
+          houseNumber.trim().isNotEmpty &&
+          (normalized['house_number'] as String?)?.trim().isNotEmpty != true) {
+        normalized['house_number'] = houseNumber.trim();
+      }
+    }
+
+    final nameTopic = topicsMap['name'];
+    if (nameTopic is Map) {
+      final nameMap = Map<String, dynamic>.from(nameTopic);
+      if (normalized['occupants'] == null && nameMap['occupants'] is List) {
+        normalized['occupants'] = nameMap['occupants'];
+      }
+      final nickname = nameMap['nickname'] as String?;
+      if (nickname != null && nickname.trim().isNotEmpty) {
+        normalized['_nickname'] = nickname.trim();
+      }
+    }
+
+    final info = topicsMap['info'];
+    if (info is Map) {
+      final infoMap = Map<String, dynamic>.from(info);
+      final topicDescription = infoMap['description'] as String?;
+      if (topicDescription != null && topicDescription.trim().isNotEmpty) {
+        normalized['_description'] = topicDescription.trim();
+      }
+      normalized['media'] = _mergeMediaLists(
+        normalized['media'],
+        infoMap['media'],
+      );
+    }
+
+    final audio = topicsMap['audio'];
+    if (audio is Map) {
+      final audioMap = Map<String, dynamic>.from(audio);
+      normalized['media'] = _mergeMediaLists(
+        normalized['media'],
+        audioMap['media'],
+      );
+    }
+
+    return normalized;
+  }
+
+  static List<dynamic> _mergeMediaLists(Object? existing, Object? extra) {
+    final merged = <dynamic>[];
+    final seen = <String>{};
+
+    void addItems(Object? raw) {
+      if (raw is! List) return;
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        final id = map['id'] as String? ?? map['url'] as String? ?? '';
+        if (id.isEmpty || seen.contains(id)) continue;
+        seen.add(id);
+        merged.add(map);
+      }
+    }
+
+    addItems(existing);
+    addItems(extra);
+    return merged;
   }
 
   static List<PoiMedia> _mediaFromMetadata(Map<String, dynamic> metaMap) {

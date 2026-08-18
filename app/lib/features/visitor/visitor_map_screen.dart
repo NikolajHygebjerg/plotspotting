@@ -106,6 +106,15 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     return _data;
   }
 
+  List<MapPoi> get _visiblePois {
+    if (!_showTopicFilters) return _displayData.pois;
+    return _displayData.pois
+        .where((poi) => poi.matchesActiveTopics(_activeTopics))
+        .toList();
+  }
+
+  EventMapData get _mapDisplayData => _displayData.copyWith(pois: _visiblePois);
+
   @override
   void initState() {
     super.initState();
@@ -801,7 +810,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         (audioTour.phase == AudioTourPhase.navigateToStop ||
             audioTour.phase == AudioTourPhase.walkingToNext);
     final showRoute = _isSearchMode && _selectedPoi != null && _routePoints.length >= 2;
-    final displayData = _displayData;
+    final displayData = _mapDisplayData;
     final audioTargetId = _isAudioTourMode ? audioTour?.currentTargetPoi?.id : null;
 
     return Scaffold(
