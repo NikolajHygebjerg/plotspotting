@@ -154,6 +154,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         );
         _audioTourController!.addListener(_onAudioTourChanged);
       }
+      _gpsReady = true;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -272,8 +273,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   }
 
   Future<void> _startTracking() async {
+    final audioTour = _isAudioTourMode;
+
     if (!await Geolocator.isLocationServiceEnabled()) {
-      if (mounted) {
+      if (mounted && !audioTour) {
         setState(() {
           _status = 'GPS er slået fra';
           _gpsReady = false;
@@ -283,11 +286,14 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     }
 
     var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
+    if (permission == LocationPermission.denied && !audioTour) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
+
+    final hasPermission = permission == LocationPermission.whileInUse ||
+        permission == LocationPermission.always;
+
+    if (!hasPermission && !audioTour) {
       if (mounted) {
         setState(() {
           _status = 'Ingen adgang til placering';
@@ -297,7 +303,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       return;
     }
 
-    if (mounted) setState(() => _gpsReady = true);
+    if (mounted && !audioTour) setState(() => _gpsReady = true);
 
     await _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
@@ -308,7 +314,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     ).listen(
       _onPosition,
       onError: (_) {
-        if (!mounted) return;
+        if (!mounted || audioTour) return;
         setState(() {
           _status = 'Placeringsfejl — prøv igen';
           _gpsReady = false;
@@ -326,16 +332,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     } on Object {
       // Stream delivers the first fix when ready.
     }
-  }
-
-  Future<void> _openLocationSettings() async {
-    await Geolocator.openLocationSettings();
-    await _startTracking();
-  }
-
-  Future<void> _openAppSettings() async {
-    await Geolocator.openAppSettings();
-    await _startTracking();
   }
 
   void _applyPosition(Position position) {
@@ -1253,65 +1249,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       right: 16,
                       bottom: 16,
                       child: VisitorAudioTourBar(controller: audioTour),
-                    ),
-                  if (_isAudioTourMode && !_gpsReady)
-                    Positioned.fill(
-                      child: ColoredBox(
-                        color: Colors.black.withValues(alpha: 0.45),
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 320),
-                            child: Card(
-                              margin: const EdgeInsets.all(24),
-                              child: Padding(
-                                padding: const EdgeInsets.all(20),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Icon(
-                                      Icons.location_off,
-                                      size: 40,
-                                      color: Theme.of(context).colorScheme.primary,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      'GPS er påkrævet',
-                                      textAlign: TextAlign.center,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(fontWeight: FontWeight.w700),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      _status ??
-                                          'Slå placering til for at følge lydvandringen og se hvor du er på kortet.',
-                                      textAlign: TextAlign.center,
-                                    ),
-                                    const SizedBox(height: 16),
-                                    FilledButton.icon(
-                                      onPressed: _openLocationSettings,
-                                      icon: const Icon(Icons.settings),
-                                      label: const Text('Slå GPS til'),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    OutlinedButton(
-                                      onPressed: _openAppSettings,
-                                      child: const Text('App-indstillinger'),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    TextButton(
-                                      onPressed: _startTracking,
-                                      child: const Text('Prøv igen'),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                     ),
                   if (_isExploreMode)
                     Positioned(
