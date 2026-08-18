@@ -4,7 +4,7 @@ import '../../data/models/event_map_data.dart';
 import '../visitor/visitor_experience.dart';
 import '../visitor/visitor_map_screen.dart';
 
-/// Gæsteflow som besøgende ser det — åbner direkte på kortet med bundmenu.
+/// Gæsteflow som besøgende ser det — kort uden gæstebundmenu (arrangør har adminmenu).
 class OrganizerGuestPreview extends StatelessWidget {
   const OrganizerGuestPreview({
     super.key,

@@ -106,9 +106,9 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   bool get _isExploreMode => widget.experience == VisitorExperience.explore;
   bool get _isAudioTourMode => widget.experience == VisitorExperience.audioTour;
 
-  bool get _showBottomNav => !widget.embed;
+  bool get _showBottomNav => !widget.embed && !widget.organizerPreview;
 
-  double get _bottomNavInset => _showBottomNav ? 72 : 0;
+  bool get _showVisitorChrome => !widget.embed && !widget.organizerPreview;
 
   VisitorTab get _currentNavTab => switch (widget.experience) {
         VisitorExperience.explore => VisitorTab.explore,
@@ -958,9 +958,9 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   EdgeInsets _mapFitPadding(BuildContext context) {
     final topInset = MediaQuery.paddingOf(context).top;
     const leftFilter = 44.0;
-    final bottomInset = widget.embed ? 16.0 : 112.0;
+    final bottomInset = 16.0;
     if (_isAudioTourMode) {
-      return EdgeInsets.fromLTRB(leftFilter, topInset + 56, 20, widget.embed ? 148 : 168);
+      return EdgeInsets.fromLTRB(leftFilter, topInset + 56, 20, 148);
     }
     if (_isSearchMode) {
       return EdgeInsets.fromLTRB(leftFilter, topInset + 88, 20, bottomInset);
@@ -995,14 +995,11 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: Column(
+        child: Stack(
           children: [
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: RepaintBoundary(
-                      child: EventMapWidget(
+            Positioned.fill(
+              child: RepaintBoundary(
+                child: EventMapWidget(
                       data: displayData,
                       routePoints: showRoute
                           ? _routePoints
@@ -1043,7 +1040,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                     ),
                   ),
                   ),
-                  if (!_isSearchMode && !widget.embed)
+                  if (!_isSearchMode && _showVisitorChrome)
                     Positioned(
                       top: 8,
                       left: 16,
@@ -1059,7 +1056,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                         ),
                       ),
                     ),
-                  if (!_isSearchMode && !widget.embed)
+                  if (!_isSearchMode && _showVisitorChrome)
                     Positioned(
                       top: 8,
                       right: 16,
@@ -1208,7 +1205,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                   ),
                   Positioned(
                     right: 16,
-                    bottom: (_isAudioTourMode ? 148 : 16) + _bottomNavInset,
+                    bottom: _isAudioTourMode ? 148 : 16,
                     child: VisitorMapControls(
                       onZoomIn: _zoomIn,
                       onZoomOut: _zoomOut,
@@ -1219,7 +1216,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                     Positioned(
                       left: 16,
                       right: 16,
-                      bottom: 16 + _bottomNavInset,
+                      bottom: 16,
                       child: VisitorAudioTourBar(controller: audioTour),
                     ),
                   if (_isExploreMode)
@@ -1280,18 +1277,18 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                   if (_audioTourGuiding && !_audioTourMapFollowing)
                     VisitorRecenterChip(
                       onTap: _recenterOnUser,
-                      bottom: 168 + _bottomNavInset,
+                      bottom: 168,
                     ),
                   if (_isNavigating && !_searchMapFollowing)
                     VisitorRecenterChip(
                       onTap: _recenterOnUser,
-                      bottom: 16 + _bottomNavInset,
+                      bottom: 16,
                     ),
                   if (_showTopicFilters)
                     Positioned(
                       left: 0,
                       top: _isSearchMode ? 96 : 72,
-                      bottom: (_isAudioTourMode ? 160 : 96) + _bottomNavInset,
+                      bottom: _isAudioTourMode ? 160 : 96,
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: VisitorPoiTopicFilterDrawer(
@@ -1301,17 +1298,15 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       ),
                     ),
                 ],
-              ),
-            ),
-            if (_showBottomNav)
-              VisitorBottomNav(
-                current: _currentNavTab,
-                showAudioTour: _data.hasAudioTour,
-                onChanged: _onExperienceTabChanged,
-              ),
-          ],
         ),
       ),
+      bottomNavigationBar: _showBottomNav
+          ? VisitorBottomNav(
+              current: _currentNavTab,
+              showAudioTour: _data.hasAudioTour,
+              onChanged: _onExperienceTabChanged,
+            )
+          : null,
     );
   }
 }
