@@ -98,6 +98,8 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   List<RouteManeuver> _audioTourManeuvers = const [];
   List<ll.LatLng> _lastAudioTourGuidedRoute = const [];
   Position? _lastPosition;
+  double? _movementHeading;
+  ll.LatLng? _previousPositionForHeading;
 
   bool get _showTopicFilters => !_isAudioTourMode;
 
@@ -111,10 +113,11 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       !widget.organizerPreview &&
       (_audioTourController?.isGuidingToStop ?? false);
 
-  double? get _userHeading =>
-      _lastPosition != null && _lastPosition!.heading >= 0
-          ? _lastPosition!.heading
-          : null;
+  double? get _userHeading {
+    final heading = _lastPosition?.heading;
+    if (heading != null && heading >= 0) return heading;
+    return _movementHeading;
+  }
 
   bool get _userLocationNavigating => _isNavigating || _audioTourGuiding;
 
@@ -345,20 +348,41 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     );
   }
 
+  void _updateMovementHeading(Position position) {
+    if (position.heading >= 0) {
+      _movementHeading = position.heading;
+      return;
+    }
+
+    final current = ll.LatLng(position.latitude, position.longitude);
+    final previous = _previousPositionForHeading;
+    _previousPositionForHeading = current;
+    if (previous == null) return;
+
+    const distance = ll.Distance();
+    if (distance(previous, current) < 2) return;
+    _movementHeading = bearingDegrees(previous, current);
+  }
+
   void _onPosition(Position position) {
+    if (!mounted) return;
     _lastPosition = position;
     _applyPosition(position);
+    _updateMovementHeading(position);
 
     if (_isAudioTourMode && _audioTourController != null) {
-      if (!_gpsReady && mounted) setState(() => _gpsReady = true);
+      if (!_gpsReady) _gpsReady = true;
       _audioTourController!.updateLocation(position.latitude, position.longitude);
       if (_audioTourGuiding && _audioTourMapFollowing) {
         _updateAudioTourTurnByTurn(position);
+        return;
       }
+      setState(() {});
       return;
     }
 
     if (_selectedPoi == null) {
+      setState(() {});
       return;
     }
 
@@ -368,8 +392,8 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       return;
     }
 
-    // Preview mode: refresh route at most every few meters without blocking taps.
     _scheduleRouteRefresh(position);
+    setState(() {});
   }
 
   Position? _pendingRoutePosition;

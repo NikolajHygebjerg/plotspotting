@@ -73,7 +73,12 @@ class UserLocationOverlayState extends State<UserLocationOverlay> {
         _mapBearing = widget.controller.cameraPosition?.bearing ?? 0;
       });
     } on Object {
-      // Kortet kan være midt i reload.
+      if (!mounted || token != _updateToken) return;
+      Future<void>.delayed(const Duration(milliseconds: 250), () {
+        if (mounted && token == _updateToken) {
+          updatePosition();
+        }
+      });
     }
   }
 
@@ -137,6 +142,7 @@ class _UserLocationPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
 
+    canvas.drawCircle(position, _dotRadius + 1.5, Paint()..color = Colors.black.withValues(alpha: 0.18));
     canvas.drawCircle(position, _dotRadius, fillPaint);
     canvas.drawCircle(position, _dotRadius - 0.5, ringPaint);
   }

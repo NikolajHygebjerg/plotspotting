@@ -51,6 +51,8 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
   var _mapFollowing = true;
   var _programmaticCameraMove = false;
   Position? _lastPosition;
+  double? _movementHeading;
+  ll.LatLng? _previousPositionForHeading;
   List<ll.LatLng> _routePoints = [];
   List<RouteManeuver> _maneuvers = const [];
   NavigationInstruction? _instruction;
@@ -108,6 +110,7 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
       (position) {
         if (!mounted) return;
         _lastPosition = position;
+        _updateMovementHeading(position);
         setState(() {
           _userLocation = ll.LatLng(position.latitude, position.longitude);
         });
@@ -150,15 +153,36 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
     });
   }
 
+  void _updateMovementHeading(Position position) {
+    if (position.heading >= 0) {
+      _movementHeading = position.heading;
+      return;
+    }
+
+    final current = ll.LatLng(position.latitude, position.longitude);
+    final previous = _previousPositionForHeading;
+    _previousPositionForHeading = current;
+    if (previous == null) return;
+
+    const distance = ll.Distance();
+    if (distance(previous, current) < 2) return;
+    _movementHeading = bearingDegrees(previous, current);
+  }
+
+  double? get _userHeading {
+    final heading = _lastPosition?.heading;
+    if (heading != null && heading >= 0) return heading;
+    return _movementHeading;
+  }
+
   void _updateTurnByTurn(Position position) {
     if (_routePoints.length < 2 || _maneuvers.isEmpty) return;
-    final heading = position.heading >= 0 ? position.heading : null;
     final instruction = buildNavigationInstruction(
       route: _routePoints,
       maneuvers: _maneuvers,
       lat: position.latitude,
       lng: position.longitude,
-      userHeading: heading,
+      userHeading: _userHeading,
     );
     if (!mounted) return;
     setState(() => _instruction = instruction);
@@ -375,9 +399,7 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
             showPoiMarkers: false,
             overlayEdges: _network.huntEdges,
             userLocation: _userLocation,
-            userHeading: _lastPosition != null && _lastPosition!.heading >= 0
-                ? _lastPosition!.heading
-                : null,
+            userHeading: _userHeading,
             userLocationNavigating: _isNavigating,
             onCameraMove: _onMapCameraMoved,
             onCameraTrackingDismissed: _onCameraTrackingDismissed,
