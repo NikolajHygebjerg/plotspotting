@@ -698,7 +698,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     _showPoiInfo(poi);
   }
 
-  void _backToExperiencePicker() {
+  void _leaveMap() {
     _audioTourController?.startTour();
     if (widget.organizerPreview) {
       Navigator.pop(context);
@@ -1050,7 +1050,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                         child: IconButton(
                           tooltip: 'Tilbage',
                           icon: const Icon(Icons.arrow_back),
-                          onPressed: _backToExperiencePicker,
+                          onPressed: _leaveMap,
                         ),
                       ),
                     ),
