@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../core/search/poi_search.dart';
 import 'poi_media.dart';
 import 'poi_occupant.dart';
@@ -241,8 +243,7 @@ class MapPoi {
   }
 
   factory MapPoi.fromJson(Map<String, dynamic> json) {
-    final metadata = json['metadata'];
-    final metaMap = metadata is Map ? Map<String, dynamic>.from(metadata) : <String, dynamic>{};
+    final metaMap = _metadataMapFromJson(json['metadata']);
     final normalized = _normalizeMetadataFromTopics(metaMap);
 
     var name = json['name'] as String? ?? '';
@@ -276,6 +277,23 @@ class MapPoi {
   }
 
   /// Backend gemmer emne-data i `metadata.topics` — hydrér flade felter ved load.
+  static Map<String, dynamic> _metadataMapFromJson(Object? metadata) {
+    if (metadata is Map) {
+      return Map<String, dynamic>.from(metadata);
+    }
+    if (metadata is String && metadata.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(metadata);
+        if (decoded is Map) {
+          return Map<String, dynamic>.from(decoded);
+        }
+      } on Object {
+        return {};
+      }
+    }
+    return {};
+  }
+
   static Map<String, dynamic> _normalizeMetadataFromTopics(
     Map<String, dynamic> metaMap,
   ) {

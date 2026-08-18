@@ -60,9 +60,12 @@ extension MapPoiTopicContent on MapPoi {
         if (hasAudioTopic) PoiTopic.audio,
       };
 
-  bool matchesActiveTopics(Set<PoiTopic> activeTopics) =>
-      activeTopics.isNotEmpty &&
-      availableTopics.intersection(activeTopics).isNotEmpty;
+  bool matchesActiveTopics(Set<PoiTopic> activeTopics) {
+    if (activeTopics.isEmpty) return false;
+    if (activeTopics.length == PoiTopic.values.length) return true;
+    if (availableTopics.isEmpty) return false;
+    return availableTopics.intersection(activeTopics).isNotEmpty;
+  }
 
   List<PoiMedia> get infoMedia =>
       media.where((item) => item.kind != PoiMediaKind.audio).toList();

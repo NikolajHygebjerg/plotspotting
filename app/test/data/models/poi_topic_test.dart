@@ -106,5 +106,51 @@ void main() {
       expect(poi.occupants, [const PoiOccupant(name: 'Laila')]);
       expect(poi.matchesActiveTopics(PoiTopic.values.toSet()), isTrue);
     });
+
+    test('matchesActiveTopics shows every place when all filters are active', () {
+      const poi = MapPoi(
+        id: '1',
+        name: 'Sted',
+        category: 'home',
+        lat: 56.36,
+        lng: 10.52,
+      );
+
+      expect(poi.availableTopics, isEmpty);
+      expect(poi.matchesActiveTopics(PoiTopic.values.toSet()), isTrue);
+      expect(
+        poi.matchesActiveTopics({PoiTopic.address}),
+        isFalse,
+      );
+    });
+
+    test('matchesActiveTopics respects partial filter selection', () {
+      const poi = MapPoi(
+        id: '1',
+        name: 'Hytten',
+        category: 'home',
+        lat: 56.36,
+        lng: 10.52,
+        houseNumber: '12',
+      );
+
+      expect(poi.matchesActiveTopics({PoiTopic.address, PoiTopic.name}), isTrue);
+      expect(poi.matchesActiveTopics({PoiTopic.audio}), isFalse);
+    });
+
+    test('fromJson parses metadata provided as json string', () {
+      final poi = MapPoi.fromJson({
+        'id': '2',
+        'name': 'Sted',
+        'category': 'home',
+        'lat': 56.36,
+        'lng': 10.52,
+        'metadata': '{"house_number":"18","occupants":[{"name":"Bo"}]}',
+      });
+
+      expect(poi.houseNumber, '18');
+      expect(poi.occupants, [const PoiOccupant(name: 'Bo')]);
+      expect(poi.availableTopics, contains(PoiTopic.address));
+    });
   });
 }
