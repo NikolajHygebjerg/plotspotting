@@ -29,6 +29,7 @@ import 'poi_path_connection.dart';
 import 'widgets/poi_connections_panel.dart';
 import 'widgets/poi_editor_sheet.dart';
 import 'widgets/map_area_bounds_frame.dart';
+import 'widgets/map_freehand_draw_layer.dart';
 import 'widgets/map_overlay_alignment_layer.dart';
 
 enum _MapSectionMode { area, overlay }
@@ -63,6 +64,7 @@ class MapEditorScreenState extends State<MapEditorScreen> {
 
   late EventMapData _data;
   MappingMethod? _mappingMethod;
+  PathDrawStyle _pathDrawStyle = PathDrawStyle.tap;
   EditorMode _mode = EditorMode.routesIdle;
   bool _isRecording = false;
   StreamSubscription<Position>? _positionSub;
@@ -114,6 +116,13 @@ class MapEditorScreenState extends State<MapEditorScreen> {
   }
 
   bool get _inPoiConnectionFlow => _mode == EditorMode.connectPoiToPath;
+
+  bool get _freehandPathDrawing =>
+      _activeSection == EditorSection.routes &&
+      _mappingMethod == MappingMethod.draw &&
+      _mode == EditorMode.drawPath &&
+      _pathDrawStyle == PathDrawStyle.freehand &&
+      _movingVertexId == null;
 
   @override
   void initState() {
@@ -339,6 +348,7 @@ class MapEditorScreenState extends State<MapEditorScreen> {
         return;
       case EditorMode.drawPath:
         if (_activeSection != EditorSection.routes) return;
+        if (_pathDrawStyle == PathDrawStyle.freehand) return;
         final tappedVertex = findNearestVertex(
           lat: lat,
           lng: lng,
@@ -1470,6 +1480,17 @@ class MapEditorScreenState extends State<MapEditorScreen> {
     setState(() {});
   }
 
+  void _handleFreehandPathPoint(LatLng coordinate) {
+    if (!_freehandPathDrawing) return;
+    _addPathPoint(coordinate.latitude, coordinate.longitude);
+    setState(() {});
+  }
+
+  void _selectPathDrawStyle(PathDrawStyle style) {
+    if (_pathDrawStyle == style) return;
+    setState(() => _pathDrawStyle = style);
+  }
+
   void _selectMappingMethod(MappingMethod method) {
     setState(() {
       _mappingMethod = method;
@@ -2026,7 +2047,8 @@ class MapEditorScreenState extends State<MapEditorScreen> {
                   poiDraggable: _mode == EditorMode.editPlace ||
                       _mode == EditorMode.connectPoiToPath,
                   vertexDraggable: _movingVertexId != null,
-                  onMapTap: _isMapSection ? null : _handleMapTap,
+                  scrollGesturesEnabled: !_freehandPathDrawing,
+                  onMapTap: _isMapSection || _freehandPathDrawing ? null : _handleMapTap,
                   onPoiTapped: _isMapSection ? null : _handlePoiTapped,
                   onPoiMoved: _isMapSection ? null : _handlePoiMoved,
                   onVertexTapped: _isMapSection ? null : _handleVertexTapped,
@@ -2126,6 +2148,11 @@ class MapEditorScreenState extends State<MapEditorScreen> {
                       ),
                     ),
                   ),
+                if (_freehandPathDrawing && _mapController != null)
+                  MapFreehandDrawLayer(
+                    controller: _mapController!,
+                    onDrawPoint: _handleFreehandPathPoint,
+                  ),
                 if (method == null && _activeSection == EditorSection.routes)
                   Positioned.fill(
                     child: ColoredBox(
@@ -2198,6 +2225,12 @@ class MapEditorScreenState extends State<MapEditorScreen> {
               ? 'Optager sti — gå ruten på kortet'
               : 'Tryk «Start mapping» og gå ruten fysisk';
         }
+        if (_mode == EditorMode.drawPath &&
+            _pathDrawStyle == PathDrawStyle.freehand) {
+          return _lastVertexId != null
+              ? 'Træk langs stien — slip for at afslutte strøget'
+              : 'Træk fingeren på kortet for at tegne stien';
+        }
         if (_mode == EditorMode.connectPoiToPath) {
           return 'Tryk på stien hvor tilkoblingen skal være — bekræft bagefter';
         }
@@ -2241,12 +2274,14 @@ class MapEditorScreenState extends State<MapEditorScreen> {
               _RoutesToolbar(
                 mode: _mode,
                 mappingMethod: method,
+                pathDrawStyle: _pathDrawStyle,
                 isRecording: _isRecording,
                 pathActive: _lastVertexId != null,
                 onSelectDrawPath: _selectDrawPathTool,
                 onSelectConnections: _enterConnectionsMode,
                 onToggleRecording: _toggleRecording,
                 onFinishPath: _finishPath,
+                onPathDrawStyleChanged: _selectPathDrawStyle,
               ),
               _buildActivePoiConnectionToolbar()!,
             ],
@@ -2258,12 +2293,14 @@ class MapEditorScreenState extends State<MapEditorScreen> {
             _RoutesToolbar(
               mode: _mode,
               mappingMethod: method,
+              pathDrawStyle: _pathDrawStyle,
               isRecording: _isRecording,
               pathActive: _lastVertexId != null,
               onSelectDrawPath: _selectDrawPathTool,
               onSelectConnections: _enterConnectionsMode,
               onToggleRecording: _toggleRecording,
               onFinishPath: _finishPath,
+              onPathDrawStyleChanged: _selectPathDrawStyle,
             ),
             if (_mode == EditorMode.editConnections)
               PoiConnectionsPanel(
@@ -2409,22 +2446,26 @@ class _RoutesToolbar extends StatelessWidget {
   const _RoutesToolbar({
     required this.mode,
     required this.mappingMethod,
+    required this.pathDrawStyle,
     required this.isRecording,
     required this.pathActive,
     required this.onSelectDrawPath,
     required this.onSelectConnections,
     required this.onToggleRecording,
     required this.onFinishPath,
+    required this.onPathDrawStyleChanged,
   });
 
   final EditorMode mode;
   final MappingMethod mappingMethod;
+  final PathDrawStyle pathDrawStyle;
   final bool isRecording;
   final bool pathActive;
   final VoidCallback onSelectDrawPath;
   final VoidCallback onSelectConnections;
   final VoidCallback onToggleRecording;
   final VoidCallback onFinishPath;
+  final ValueChanged<PathDrawStyle> onPathDrawStyleChanged;
 
   bool get _drawSelected =>
       mode == EditorMode.drawPath ||
@@ -2495,6 +2536,24 @@ class _RoutesToolbar extends StatelessWidget {
                 ),
               ],
             ),
+            if (mappingMethod == MappingMethod.draw) ...[
+              const SizedBox(height: 8),
+              SegmentedButton<PathDrawStyle>(
+                segments: [
+                  for (final style in PathDrawStyle.values)
+                    ButtonSegment<PathDrawStyle>(
+                      value: style,
+                      label: Text(style.title),
+                      icon: Icon(
+                        style == PathDrawStyle.tap ? Icons.touch_app : Icons.gesture,
+                      ),
+                    ),
+                ],
+                selected: {pathDrawStyle},
+                onSelectionChanged: (selection) =>
+                    onPathDrawStyleChanged(selection.first),
+              ),
+            ],
             if (pathActive && _drawSelected && mappingMethod == MappingMethod.draw)
               Align(
                 alignment: Alignment.centerRight,
