@@ -52,5 +52,59 @@ void main() {
       expect(topics['address'], {'house_number': '12'});
       expect(topics['info'], {'description': 'Blå dør'});
     });
+
+    test('fromJson hydrates topics-only metadata from backend', () {
+      final poi = MapPoi.fromJson({
+        'id': '1',
+        'name': 'Sted',
+        'category': 'home',
+        'lat': 56.36,
+        'lng': 10.52,
+        'metadata': {
+          'topics': {
+            'address': {'house_number': '36'},
+            'name': {
+              'nickname': 'Hytten',
+              'occupants': [
+                {'name': 'Laila'},
+              ],
+            },
+            'info': {
+              'description': 'Blå dør',
+              'media': [
+                {
+                  'id': 'photo',
+                  'url': 'https://example.com/photo.jpg',
+                  'kind': 'image',
+                  'storage_path': 'photo',
+                },
+              ],
+            },
+            'audio': {
+              'media': [
+                {
+                  'id': 'story',
+                  'url': 'https://example.com/story.mp3',
+                  'kind': 'audio',
+                  'storage_path': 'story',
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      expect(poi.availableTopics, {
+        PoiTopic.address,
+        PoiTopic.name,
+        PoiTopic.info,
+        PoiTopic.audio,
+      });
+      expect(poi.name, 'Hytten');
+      expect(poi.houseNumber, '36');
+      expect(poi.description, 'Blå dør');
+      expect(poi.occupants, [const PoiOccupant(name: 'Laila')]);
+      expect(poi.matchesActiveTopics(PoiTopic.values.toSet()), isTrue);
+    });
   });
 }

@@ -10,6 +10,8 @@ class VisitorAudioTourBar extends StatelessWidget {
 
   final AudioTourGuidanceController controller;
 
+  static const _accent = Color(0xFF6A1B9A);
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -17,6 +19,7 @@ class VisitorAudioTourBar extends StatelessWidget {
       builder: (context, _) {
         final phase = controller.phase;
         final wander = controller.wanderEnRoute;
+        final stopAudio = controller.currentStopAudio;
 
         return Material(
           elevation: 4,
@@ -32,13 +35,13 @@ class VisitorAudioTourBar extends StatelessWidget {
                 Row(
                   children: [
                     CircleAvatar(
-                      backgroundColor: const Color(0xFF6A1B9A).withValues(alpha: 0.12),
+                      backgroundColor: _accent.withValues(alpha: 0.12),
                       child: Icon(
                         phase == AudioTourPhase.playingWander ||
                                 phase == AudioTourPhase.walkingToNext
                             ? Icons.directions_walk
                             : Icons.headphones,
-                        color: const Color(0xFF6A1B9A),
+                        color: _accent,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -62,25 +65,49 @@ class VisitorAudioTourBar extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (controller.distanceMeters > 0 &&
-                    (phase == AudioTourPhase.navigateToStop ||
-                        phase == AudioTourPhase.walkingToNext)) ...[
+                if (controller.isGuidingToStop && controller.distanceMeters > 0) ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Ca. ${controller.distanceMeters.round()} m',
+                    'Ca. ${controller.distanceMeters.round()} m til næste stop',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ],
                 if (phase == AudioTourPhase.readyAtStop) ...[
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: controller.canPlayStop ? controller.playCurrentStop : null,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Afspil'),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(44),
-                      backgroundColor: const Color(0xFF6A1B9A),
+                  if (stopAudio != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      stopAudio.caption?.trim().isNotEmpty == true
+                          ? stopAudio.caption!.trim()
+                          : 'Fortælling klar til afspilning',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: controller.canPlayStop ? controller.playCurrentStop : null,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('Afspil'),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(44),
+                            backgroundColor: _accent,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: controller.canGoToNextStop ? controller.goToNextStop : null,
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(44),
+                            foregroundColor: _accent,
+                          ),
+                          child: const Text('Gå til næste'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
                 if (phase == AudioTourPhase.walkingToNext && wander != null) ...[
@@ -88,8 +115,7 @@ class VisitorAudioTourBar extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: controller.playWander,
                     icon: Icon(
-                      controller.phase == AudioTourPhase.playingWander &&
-                              controller.isPlaying
+                      phase == AudioTourPhase.playingWander && controller.isPlaying
                           ? Icons.pause
                           : Icons.music_note,
                     ),
@@ -113,9 +139,11 @@ class VisitorAudioTourBar extends StatelessWidget {
                       IconButton(
                         onPressed: controller.togglePlayback,
                         icon: Icon(
-                          controller.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                          controller.isPlaying
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
                           size: 36,
-                          color: const Color(0xFF6A1B9A),
+                          color: _accent,
                         ),
                       ),
                       Expanded(
@@ -127,8 +155,8 @@ class VisitorAudioTourBar extends StatelessWidget {
                                 onChanged: (value) {
                                   controller.seek(
                                     Duration(
-                                      milliseconds: (controller.duration!.inMilliseconds * value)
-                                          .round(),
+                                      milliseconds:
+                                          (controller.duration!.inMilliseconds * value).round(),
                                     ),
                                   );
                                 },
@@ -136,6 +164,15 @@ class VisitorAudioTourBar extends StatelessWidget {
                             : const LinearProgressIndicator(),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 4),
+                  OutlinedButton(
+                    onPressed: controller.canGoToNextStop ? controller.goToNextStop : null,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(44),
+                      foregroundColor: _accent,
+                    ),
+                    child: const Text('Gå til næste'),
                   ),
                 ],
                 if (phase == AudioTourPhase.completed) ...[

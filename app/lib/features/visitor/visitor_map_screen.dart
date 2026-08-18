@@ -88,6 +88,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   var _routeComputeGeneration = 0;
   AudioTourGuidanceController? _audioTourController;
   Set<PoiTopic> _activeTopics = PoiTopic.values.toSet();
+  bool _gpsReady = false;
 
   bool get _showTopicFilters => !_isAudioTourMode;
 
@@ -108,6 +109,15 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     return _data;
   }
 
+  List<MapPoi> get _visiblePois {
+    if (!_showTopicFilters) return _displayData.pois;
+    return _displayData.pois
+        .where((poi) => poi.matchesActiveTopics(_activeTopics))
+        .toList();
+  }
+
+  EventMapData get _mapDisplayData => _displayData.copyWith(pois: _visiblePois);
+
   @override
   void initState() {
     super.initState();
@@ -124,6 +134,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
           data: _data,
           config: tour,
         );
+        _audioTourController!.addListener(_onAudioTourChanged);
       }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -135,11 +146,16 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     });
   }
 
+  void _onAudioTourChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _positionSub?.cancel();
     _mapController = null;
     _searchDebouncer.dispose();
+    _audioTourController?.removeListener(_onAudioTourChanged);
     _audioTourController?.dispose();
     _searchController.dispose();
     _searchFocus.dispose();
@@ -153,7 +169,12 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
   Future<void> _startTracking() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      if (mounted) setState(() => _status = 'GPS er slået fra');
+      if (mounted) {
+        setState(() {
+          _status = 'GPS er slået fra';
+          _gpsReady = false;
+        });
+      }
       return;
     }
 
@@ -163,9 +184,16 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      if (mounted) setState(() => _status = 'Ingen adgang til placering');
+      if (mounted) {
+        setState(() {
+          _status = 'Ingen adgang til placering';
+          _gpsReady = false;
+        });
+      }
       return;
     }
+
+    if (mounted) setState(() => _gpsReady = true);
 
     await _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
@@ -177,7 +205,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       _onPosition,
       onError: (_) {
         if (!mounted) return;
-        setState(() => _status = 'Placeringsfejl — prøv igen');
+        setState(() {
+          _status = 'Placeringsfejl — prøv igen';
+          _gpsReady = false;
+        });
       },
     );
 
@@ -191,6 +222,16 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     } on Object {
       // Stream delivers the first fix when ready.
     }
+  }
+
+  Future<void> _openLocationSettings() async {
+    await Geolocator.openLocationSettings();
+    await _startTracking();
+  }
+
+  Future<void> _openAppSettings() async {
+    await Geolocator.openAppSettings();
+    await _startTracking();
   }
 
   void _applyPosition(Position position) {
@@ -207,6 +248,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     _applyPosition(position);
 
     if (_isAudioTourMode && _audioTourController != null) {
+      if (!_gpsReady && mounted) setState(() => _gpsReady = true);
       _audioTourController!.updateLocation(position.latitude, position.longitude);
       return;
     }
@@ -808,11 +850,11 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     final audioTour = _audioTourController;
     final showAudioRoute = _isAudioTourMode &&
         audioTour != null &&
+        _gpsReady &&
         audioTour.routePoints.length >= 2 &&
-        (audioTour.phase == AudioTourPhase.navigateToStop ||
-            audioTour.phase == AudioTourPhase.walkingToNext);
+        audioTour.isGuidingToStop;
     final showRoute = _isSearchMode && _selectedPoi != null && _routePoints.length >= 2;
-    final displayData = _displayData;
+    final displayData = _mapDisplayData;
     final audioTargetId = _isAudioTourMode ? audioTour?.currentTargetPoi?.id : null;
 
     return Scaffold(
@@ -837,11 +879,14 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                           : null,
                       constrainToEventBounds: true,
                       boundsFitPadding: _mapFitPadding(context),
-                      myLocationEnabled: !widget.organizerPreview,
+                      myLocationEnabled: !widget.organizerPreview &&
+                          (_gpsReady || !_isAudioTourMode),
                       myLocationRenderMode: !widget.organizerPreview
                           ? MyLocationRenderMode.compass
                           : MyLocationRenderMode.normal,
-                      myLocationTrackingMode: _isNavigating
+                      myLocationTrackingMode: !widget.organizerPreview &&
+                              (_isNavigating ||
+                                  (_isAudioTourMode && _gpsReady))
                           ? MyLocationTrackingMode.trackingCompass
                           : MyLocationTrackingMode.none,
                       showPathVertices: false,
@@ -1045,6 +1090,65 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       right: 16,
                       bottom: 16,
                       child: VisitorAudioTourBar(controller: audioTour),
+                    ),
+                  if (_isAudioTourMode && !_gpsReady)
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 320),
+                            child: Card(
+                              margin: const EdgeInsets.all(24),
+                              child: Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Icon(
+                                      Icons.location_off,
+                                      size: 40,
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'GPS er påkrævet',
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(fontWeight: FontWeight.w700),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _status ??
+                                          'Slå placering til for at følge lydvandringen og se hvor du er på kortet.',
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    FilledButton.icon(
+                                      onPressed: _openLocationSettings,
+                                      icon: const Icon(Icons.settings),
+                                      label: const Text('Slå GPS til'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    OutlinedButton(
+                                      onPressed: _openAppSettings,
+                                      child: const Text('App-indstillinger'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    TextButton(
+                                      onPressed: _startTracking,
+                                      child: const Text('Prøv igen'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   if (_isExploreMode)
                     Positioned(
