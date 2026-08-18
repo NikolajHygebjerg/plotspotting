@@ -36,7 +36,7 @@ import 'widgets/route_map_navigation_camera.dart';
 import 'widgets/visitor_recenter_chip.dart';
 import 'audio_tour_guidance_controller.dart';
 import 'visitor_experience.dart';
-import 'visitor_experience_picker_screen.dart';
+import 'visitor_audio_tour_picker_screen.dart';
 
 class VisitorMapScreen extends StatefulWidget {
   const VisitorMapScreen({
@@ -69,7 +69,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   final _searchFocus = FocusNode();
 
   late EventMapData _data;
-  VisitorTab _tab = VisitorTab.map;
   MapPoi? _selectedPoi;
   bool _isNavigating = false;
   Set<String> _favoriteIds = {};
@@ -106,6 +105,16 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   bool get _isSearchMode => widget.experience == VisitorExperience.search;
   bool get _isExploreMode => widget.experience == VisitorExperience.explore;
   bool get _isAudioTourMode => widget.experience == VisitorExperience.audioTour;
+
+  bool get _showBottomNav => !widget.embed && !widget.organizerPreview;
+
+  double get _bottomNavInset => _showBottomNav ? 72 : 0;
+
+  VisitorTab get _currentNavTab => switch (widget.experience) {
+        VisitorExperience.explore => VisitorTab.explore,
+        VisitorExperience.search => VisitorTab.route,
+        VisitorExperience.audioTour => VisitorTab.audioTour,
+      };
 
   bool get _audioTourGuiding =>
       _isAudioTourMode &&
@@ -547,7 +556,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       _approachMeters = 0;
       _departureMeters = 0;
       _status = null;
-      _tab = VisitorTab.map;
     });
     _searchFocus.unfocus();
   }
@@ -572,7 +580,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       _status = null;
       _query = poi.displayTitle;
       _searchController.text = poi.navigationLabel;
-      _tab = VisitorTab.map;
     });
     unawaited(_recomputeRouteForCurrentLocation());
   }
@@ -697,34 +704,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       Navigator.pop(context);
       return;
     }
-    final options = availableExperiences(_data);
-    if (options.length <= 1) {
-      Navigator.pop(context);
-      return;
-    }
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VisitorExperiencePickerScreen(
-          mapData: _data,
-          embed: widget.embed,
-        ),
-      ),
-    );
-  }
-
-  void _switchExperience() {
-    _audioTourController?.startTour();
-    _clearSelection();
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VisitorExperiencePickerScreen(
-          mapData: _data,
-          embed: widget.embed,
-        ),
-      ),
-    );
+    Navigator.pop(context);
   }
 
   Future<void> _toggleFavorite(MapPoi poi) async {
@@ -812,62 +792,60 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
     }
   }
 
-  void _onTabChanged(VisitorTab tab) {
-    setState(() => _tab = tab);
-    if (tab == VisitorTab.search) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _searchFocus.requestFocus();
-      });
-    } else {
-      _searchFocus.unfocus();
-    }
-    if (tab == VisitorTab.favorites) {
-      _showFavoritesSheet();
-    } else if (tab == VisitorTab.menu) {
-      _showMenuSheet();
-    }
-  }
+  void _onExperienceTabChanged(VisitorTab tab) {
+    final experience = switch (tab) {
+      VisitorTab.explore => VisitorExperience.explore,
+      VisitorTab.route => VisitorExperience.search,
+      VisitorTab.audioTour => VisitorExperience.audioTour,
+    };
 
-  Future<void> _showFavoritesSheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (context) {
-        final favorites = _favoritePois;
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Favoritter',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              if (favorites.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('Ingen favoritter endnu — tryk ♥ på et sted'),
-                )
-              else
-                ...favorites.map(
-                  (poi) => ListTile(
-                    leading: const Icon(Icons.favorite, color: Colors.red),
-                    title: Text(poi.displayTitle),
-                    subtitle: Text(poi.displaySubtitle),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _selectDestination(poi);
-                    },
-                  ),
-                ),
-            ],
+    if (experience == widget.experience) {
+      if (experience == VisitorExperience.search) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _searchFocus.requestFocus();
+        });
+      }
+      return;
+    }
+
+    if (experience == VisitorExperience.audioTour) {
+      final tours = _data.audioTourCatalog.configuredTours;
+      if (tours.length > 1) {
+        _audioTourController?.startTour();
+        _clearSelection();
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VisitorAudioTourPickerScreen(mapData: _data),
           ),
         );
-      },
+        return;
+      }
+    }
+
+    _navigateToExperience(
+      experience,
+      audioTour: experience == VisitorExperience.audioTour ? _activeAudioTour : null,
     );
-    if (mounted) setState(() => _tab = VisitorTab.map);
+  }
+
+  void _navigateToExperience(
+    VisitorExperience experience, {
+    AudioTourConfig? audioTour,
+  }) {
+    _audioTourController?.startTour();
+    _clearSelection();
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VisitorMapScreen(
+          mapData: _data,
+          experience: experience,
+          audioTourConfig: audioTour,
+          embed: widget.embed,
+        ),
+      ),
+    );
   }
 
   Future<void> _showMenuSheet() async {
@@ -910,16 +888,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                 );
               },
             ),
-            if (availableExperiences(_data).length > 1)
-              ListTile(
-                leading: const Icon(Icons.apps_outlined),
-                title: const Text('Skift oplevelse'),
-                subtitle: const Text('Find et sted, opdagelse eller lydvandring'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _switchExperience();
-                },
-              ),
             ListTile(
               leading: const Icon(Icons.close),
               title: const Text('Luk kort'),
@@ -929,7 +897,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         ),
       ),
     );
-    if (mounted) setState(() => _tab = VisitorTab.map);
   }
 
   Future<void> _openAdminEditor() async {
@@ -1236,7 +1203,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                   ),
                   Positioned(
                     right: 16,
-                    bottom: _isAudioTourMode ? 148 : 16,
+                    bottom: (_isAudioTourMode ? 148 : 16) + _bottomNavInset,
                     child: VisitorMapControls(
                       onZoomIn: _zoomIn,
                       onZoomOut: _zoomOut,
@@ -1247,7 +1214,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                     Positioned(
                       left: 16,
                       right: 16,
-                      bottom: 16,
+                      bottom: 16 + _bottomNavInset,
                       child: VisitorAudioTourBar(controller: audioTour),
                     ),
                   if (_isExploreMode)
@@ -1308,18 +1275,18 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                   if (_audioTourGuiding && !_audioTourMapFollowing)
                     VisitorRecenterChip(
                       onTap: _recenterOnUser,
-                      bottom: 168,
+                      bottom: 168 + _bottomNavInset,
                     ),
                   if (_isNavigating && !_searchMapFollowing)
                     VisitorRecenterChip(
                       onTap: _recenterOnUser,
-                      bottom: 16,
+                      bottom: 16 + _bottomNavInset,
                     ),
                   if (_showTopicFilters)
                     Positioned(
                       left: 0,
                       top: _isSearchMode ? 96 : 72,
-                      bottom: _isAudioTourMode ? 160 : 96,
+                      bottom: (_isAudioTourMode ? 160 : 96) + _bottomNavInset,
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: VisitorPoiTopicFilterDrawer(
@@ -1331,10 +1298,11 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                 ],
               ),
             ),
-            if (_isSearchMode && !widget.embed)
+            if (_showBottomNav)
               VisitorBottomNav(
-                current: _tab,
-                onChanged: _onTabChanged,
+                current: _currentNavTab,
+                showAudioTour: _data.hasAudioTour,
+                onChanged: _onExperienceTabChanged,
               ),
           ],
         ),
