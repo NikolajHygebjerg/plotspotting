@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 
-enum VisitorTab { map, search, favorites, menu }
+enum VisitorTab { explore, route, audioTour }
 
 class VisitorBottomNav extends StatelessWidget {
   const VisitorBottomNav({
     super.key,
     required this.current,
     required this.onChanged,
+    this.showAudioTour = false,
   });
 
   final VisitorTab current;
   final ValueChanged<VisitorTab> onChanged;
+  final bool showAudioTour;
 
   @override
   Widget build(BuildContext context) {
@@ -30,34 +32,30 @@ class VisitorBottomNav extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _NavItem(
-                icon: Icons.map_outlined,
-                selectedIcon: Icons.map,
-                label: 'Kort',
-                selected: current == VisitorTab.map,
-                onTap: () => onChanged(VisitorTab.map),
+                icon: Icons.explore_outlined,
+                selectedIcon: Icons.explore,
+                label: 'Udforsk',
+                selected: current == VisitorTab.explore,
+                onTap: () => onChanged(VisitorTab.explore),
               ),
               _NavItem(
-                icon: Icons.search,
-                label: 'Søg',
-                selected: current == VisitorTab.search,
-                onTap: () => onChanged(VisitorTab.search),
+                icon: Icons.directions_outlined,
+                selectedIcon: Icons.directions,
+                label: 'Rute',
+                selected: current == VisitorTab.route,
+                onTap: () => onChanged(VisitorTab.route),
               ),
-              _NavItem(
-                icon: Icons.favorite_border,
-                selectedIcon: Icons.favorite,
-                label: 'Favoritter',
-                selected: current == VisitorTab.favorites,
-                onTap: () => onChanged(VisitorTab.favorites),
-              ),
-              _NavItem(
-                icon: Icons.menu,
-                label: 'Menu',
-                selected: current == VisitorTab.menu,
-                onTap: () => onChanged(VisitorTab.menu),
-              ),
+              if (showAudioTour)
+                _NavItem(
+                  icon: Icons.headphones_outlined,
+                  selectedIcon: Icons.headphones,
+                  label: 'Lydvandring',
+                  selected: current == VisitorTab.audioTour,
+                  onTap: () => onChanged(VisitorTab.audioTour),
+                ),
             ],
           ),
         ),
@@ -88,7 +86,7 @@ class _NavItem extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [

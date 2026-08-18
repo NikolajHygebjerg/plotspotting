@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../data/repositories/event_repository.dart';
 import '../../data/models/event_map_data.dart';
 import 'visitor_experience.dart';
-import 'visitor_experience_picker_screen.dart';
 import 'visitor_map_screen.dart';
 import 'visitor_treasure_hunt_landing_screen.dart';
 import 'visitor_treasure_hunt_screen.dart';
@@ -88,24 +87,19 @@ class _OpenPublishedEventScreenState extends State<OpenPublishedEventScreen> {
       }
 
       final options = availableExperiences(data);
-      if (options.length <= 1) {
-        await _openMap(
-          context,
-          data,
-          options.isNotEmpty ? options.first : VisitorExperience.search,
-        );
+      if (options.isEmpty) {
+        await _openMap(context, data, VisitorExperience.search);
         return;
       }
 
-      await Navigator.pushReplacement(
+      await _openMap(
         context,
-        MaterialPageRoute(
-          builder: (context) => VisitorExperiencePickerScreen(
-            mapData: data,
-            embed: widget.embed,
-          ),
-        ),
+        data,
+        options.contains(VisitorExperience.explore)
+            ? VisitorExperience.explore
+            : options.first,
       );
+      return;
     } catch (error) {
       if (!mounted) return;
       await showDialog<void>(
