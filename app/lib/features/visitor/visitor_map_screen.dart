@@ -106,7 +106,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   bool get _isExploreMode => widget.experience == VisitorExperience.explore;
   bool get _isAudioTourMode => widget.experience == VisitorExperience.audioTour;
 
-  bool get _showBottomNav => !widget.embed && !widget.organizerPreview;
+  bool get _showBottomNav => !widget.embed;
 
   double get _bottomNavInset => _showBottomNav ? 72 : 0;
 
@@ -816,7 +816,11 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => VisitorAudioTourPickerScreen(mapData: _data),
+            builder: (context) => VisitorAudioTourPickerScreen(
+              mapData: _data,
+              embed: widget.embed,
+              organizerPreview: widget.organizerPreview,
+            ),
           ),
         );
         return;
@@ -843,6 +847,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
           experience: experience,
           audioTourConfig: audioTour,
           embed: widget.embed,
+          organizerPreview: widget.organizerPreview,
         ),
       ),
     );
