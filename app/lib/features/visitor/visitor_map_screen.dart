@@ -111,6 +111,13 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
       !widget.organizerPreview &&
       (_audioTourController?.isGuidingToStop ?? false);
 
+  double? get _userHeading =>
+      _lastPosition != null && _lastPosition!.heading >= 0
+          ? _lastPosition!.heading
+          : null;
+
+  bool get _userLocationNavigating => _isNavigating || _audioTourGuiding;
+
   AudioTourConfig? get _activeAudioTour =>
       widget.audioTourConfig ?? _data.audioTourCatalog.primaryTour;
 
@@ -1015,12 +1022,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                           : null,
                       constrainToEventBounds: true,
                       boundsFitPadding: _mapFitPadding(context),
-                      myLocationEnabled: !widget.organizerPreview &&
-                          (_gpsReady || !_isAudioTourMode),
-                      myLocationRenderMode: !widget.organizerPreview
-                          ? MyLocationRenderMode.compass
-                          : MyLocationRenderMode.normal,
-                      myLocationTrackingMode: MyLocationTrackingMode.none,
+                      userLocation:
+                          !widget.organizerPreview ? _userLocation : null,
+                      userHeading: _userHeading,
+                      userLocationNavigating: _userLocationNavigating,
                       showPathVertices: false,
                       showEventPaths: !hasIllustrated,
                       showIllustratedBasemap: true,

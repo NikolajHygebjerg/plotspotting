@@ -374,9 +374,11 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
             showPathVertices: false,
             showPoiMarkers: false,
             overlayEdges: _network.huntEdges,
-            myLocationEnabled: true,
-            myLocationRenderMode: MyLocationRenderMode.compass,
-            myLocationTrackingMode: MyLocationTrackingMode.none,
+            userLocation: _userLocation,
+            userHeading: _lastPosition != null && _lastPosition!.heading >= 0
+                ? _lastPosition!.heading
+                : null,
+            userLocationNavigating: _isNavigating,
             onCameraMove: _onMapCameraMoved,
             onCameraTrackingDismissed: _onCameraTrackingDismissed,
             onMapCreated: (controller) {
