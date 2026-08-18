@@ -9,11 +9,20 @@ class VisitorAudioTourPickerScreen extends StatelessWidget {
   const VisitorAudioTourPickerScreen({
     super.key,
     required this.mapData,
+    this.onTourSelected,
+    this.embed = false,
   });
 
   final EventMapData mapData;
+  final ValueChanged<AudioTourConfig>? onTourSelected;
+  final bool embed;
 
   void _openTour(BuildContext context, AudioTourConfig tour) {
+    if (onTourSelected != null) {
+      onTourSelected!(tour);
+      return;
+    }
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -31,7 +40,7 @@ class VisitorAudioTourPickerScreen extends StatelessWidget {
     final tours = mapData.audioTourCatalog.configuredTours;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: embed ? null : AppBar(
         title: Text(mapData.event.name),
         centerTitle: true,
       ),

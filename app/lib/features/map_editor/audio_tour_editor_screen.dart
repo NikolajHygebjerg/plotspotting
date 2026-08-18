@@ -8,6 +8,7 @@ import '../../data/models/audio_tour.dart';
 import '../../data/models/event_map_data.dart';
 import '../../data/models/map_poi.dart';
 import '../../data/repositories/event_repository.dart';
+import '../organizer/organizer_shell.dart';
 import 'audio_tour_creation_method.dart';
 import 'audio_tour_walk_screen.dart';
 import 'widgets/poi_audio_picker_sheet.dart';
@@ -18,11 +19,13 @@ class AudioTourEditorScreen extends StatefulWidget {
     required this.eventId,
     required this.mapData,
     required this.onSaved,
+    this.useOrganizerShell = false,
   });
 
   final String eventId;
   final EventMapData mapData;
   final ValueChanged<EventMapData> onSaved;
+  final bool useOrganizerShell;
 
   @override
   State<AudioTourEditorScreen> createState() => _AudioTourEditorScreenState();
@@ -46,6 +49,20 @@ class _AudioTourEditorScreenState extends State<AudioTourEditorScreen> {
 
   AudioTourConfig get _currentTour =>
       _tours.firstWhere((tour) => tour.id == _selectedTourId);
+
+  bool get _currentTourReadyForGuests =>
+      _enabled &&
+      _items.any((item) => item.kind == AudioTourItemKind.poi);
+
+  String? get _guestReadinessHint {
+    if (!_enabled) {
+      return 'Slå «Aktivér dette tema» til for at vise lydvandringen for gæster.';
+    }
+    if (!_currentTourReadyForGuests) {
+      return 'Tilføj mindst ét sted med lyd som startsted — kun vandrelyd er ikke nok.';
+    }
+    return 'Gæster kan vælge denne lydvandring når kortet er publiceret og gemt.';
+  }
 
   @override
   void initState() {
@@ -179,6 +196,18 @@ class _AudioTourEditorScreenState extends State<AudioTourEditorScreen> {
     });
 
     _persistCurrentTour();
+
+    final incompleteEnabled = _tours.where((tour) => tour.enabled && !tour.isConfigured);
+    if (incompleteEnabled.isNotEmpty) {
+      setState(() {
+        _saving = false;
+        _error =
+            'Aktiverede lydvandringer skal have mindst ét sted med lyd i ruten '
+            '— tilføj et startsted og tryk Gem igen';
+      });
+      return;
+    }
+
     final metadata = {
       ..._mapData.event.metadata,
       ...AudioTourCatalog(_tours).toEventMetadata(),
@@ -186,6 +215,14 @@ class _AudioTourEditorScreenState extends State<AudioTourEditorScreen> {
     metadata.remove('audio_tour');
 
     try {
+      await _repository.saveGraph(
+        eventId: widget.eventId,
+        vertices: _mapData.vertices,
+        edges: _mapData.edges,
+        pois: _mapData.pois,
+        centerLat: _mapData.event.centerLat,
+        centerLng: _mapData.event.centerLng,
+      );
       await _repository.saveMetadata(
         eventId: widget.eventId,
         metadata: metadata,
@@ -353,29 +390,36 @@ class _AudioTourEditorScreenState extends State<AudioTourEditorScreen> {
     final hasStart = _items.any((item) => item.kind == AudioTourItemKind.poi);
     final editingTour = _selectedTourId.isNotEmpty;
 
+    final shellActions = [
+      if (_creationMethod == AudioTourCreationMethod.manual && editingTour)
+        IconButton(
+          tooltip: 'Gå ruten fysisk',
+          onPressed: _openWalkEditor,
+          icon: const Icon(Icons.directions_walk),
+        ),
+      if (_saving)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        )
+      else
+        TextButton(onPressed: _creationMethod != null ? _save : null, child: const Text('Gem')),
+    ];
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Lydvandring'),
-        actions: [
-          if (_creationMethod == AudioTourCreationMethod.manual && editingTour)
-            IconButton(
-              tooltip: 'Gå ruten fysisk',
-              onPressed: _openWalkEditor,
-              icon: const Icon(Icons.directions_walk),
-            ),
-          if (_saving)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
+      appBar: widget.useOrganizerShell
+          ? OrganizerShellAppBar(
+              title: 'Lydvandring',
+              actions: shellActions,
             )
-          else
-            TextButton(onPressed: _creationMethod != null ? _save : null, child: const Text('Gem')),
-        ],
-      ),
+          : AppBar(
+              title: const Text('Lydvandring'),
+              actions: shellActions,
+            ),
       body: _creationMethod == null
           ? _CreationMethodPicker(onSelected: _selectCreationMethod)
           : ListView(
@@ -421,6 +465,19 @@ class _AudioTourEditorScreenState extends State<AudioTourEditorScreen> {
                   value: _enabled,
                   onChanged: (value) => setState(() => _enabled = value),
                 ),
+                if (_guestReadinessHint != null) ...[
+                  const SizedBox(height: 8),
+                  Material(
+                    color: _currentTourReadyForGuests
+                        ? Colors.green.shade50
+                        : Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Text(_guestReadinessHint!),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Text(
                   'Byg ruten som en liste: vælg sted og hvilken lydfil der hører til '

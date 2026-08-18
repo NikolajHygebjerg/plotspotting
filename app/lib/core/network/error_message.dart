@@ -26,6 +26,16 @@ String friendlyApiError(Object error) {
         'Kør migrationerne i Supabase SQL Editor (001 → 004).';
   }
 
+  if (text.contains('Invalid API key') ||
+      text.contains('invalid api key') ||
+      (text.contains('401') && text.toLowerCase().contains('api key'))) {
+    return 'Supabase anon key er ugyldig.\n\n'
+        '1. Gå til Supabase → Project Settings → API\n'
+        '2. Kopiér **anon public** key\n'
+        '3. Indsæt i app/assets/env.json\n'
+        '4. Kør flutter run igen (hot reload er ikke nok)';
+  }
+
   if (text.contains('forbidden') || text.contains('not_authenticated')) {
     return 'Du har ikke adgang til dette kort. Log ind med den rigtige konto.';
   }

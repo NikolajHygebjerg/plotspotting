@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import '../map_setup/basemap_alignment_screen.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -9,6 +11,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
 import '../../core/geo/geo_utils.dart';
+import '../../core/utils/debounce.dart';
 import '../../core/storage/organizer_session_persistence.dart';
 import '../../data/models/event_map_data.dart';
 import '../../data/models/map_bounds.dart';
@@ -25,6 +28,10 @@ import 'mapping_method.dart';
 import 'poi_path_connection.dart';
 import 'widgets/poi_connections_panel.dart';
 import 'widgets/poi_editor_sheet.dart';
+import 'widgets/map_area_bounds_frame.dart';
+import 'widgets/map_overlay_alignment_layer.dart';
+
+enum _MapSectionMode { area, overlay }
 
 class MapEditorScreen extends StatefulWidget {
   const MapEditorScreen({
@@ -32,23 +39,31 @@ class MapEditorScreen extends StatefulWidget {
     required this.eventId,
     required this.eventName,
     this.initialData,
+    this.embedded = false,
+    this.section,
+    this.onSectionChanged,
+    this.onDataChanged,
   });
 
   final String eventId;
   final String eventName;
   final EventMapData? initialData;
+  final bool embedded;
+  final EditorSection? section;
+  final ValueChanged<EditorSection>? onSectionChanged;
+  final ValueChanged<EventMapData>? onDataChanged;
 
   @override
-  State<MapEditorScreen> createState() => _MapEditorScreenState();
+  State<MapEditorScreen> createState() => MapEditorScreenState();
 }
 
-class _MapEditorScreenState extends State<MapEditorScreen> {
+class MapEditorScreenState extends State<MapEditorScreen> {
   final _repository = EventRepository();
   final _uuid = const Uuid();
 
   late EventMapData _data;
   MappingMethod? _mappingMethod;
-  EditorMode _mode = EditorMode.drawPath;
+  EditorMode _mode = EditorMode.routesIdle;
   bool _isRecording = false;
   StreamSubscription<Position>? _positionSub;
   Position? _currentPosition;
@@ -69,10 +84,36 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   PoiPathConnectionDraft? _poiConnectionDraft;
   BulkPoiPathConnectionPlan? _bulkConnectionPlan;
   EditorSection _section = EditorSection.routes;
+  _MapSectionMode _mapSectionMode = _MapSectionMode.area;
+  MapLibreMapController? _mapController;
+  int _mapCameraRevision = 0;
+  Uint8List? _overlayImageBytes;
+  MapBounds? _overlayEditBounds;
+  bool _overlayImageLoading = false;
+  bool _overlaySaving = false;
+  double _overlayOpacity = 0.55;
+  final _mapCameraThrottler = Throttler(const Duration(milliseconds: 120));
 
-  bool get _inConnectionsFlow =>
-      _mode == EditorMode.editConnections ||
-      _mode == EditorMode.connectPoiToPath;
+  EditorSection get _activeSection => widget.section ?? _section;
+
+  EventMapData get mapData => _data;
+
+  void _notifyDataChanged() {
+    widget.onDataChanged?.call(_data);
+  }
+
+  @override
+  void didUpdateWidget(covariant MapEditorScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.embedded &&
+        widget.section != null &&
+        widget.section != oldWidget.section &&
+        widget.section != _section) {
+      _onSectionChanged(widget.section!);
+    }
+  }
+
+  bool get _inPoiConnectionFlow => _mode == EditorMode.connectPoiToPath;
 
   @override
   void initState() {
@@ -90,6 +131,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   @override
   void dispose() {
     _positionSub?.cancel();
+    _mapController = null;
     super.dispose();
   }
 
@@ -233,6 +275,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Kort gemt')),
       );
+      _notifyDataChanged();
       return true;
     } catch (error) {
       if (!mounted) return false;
@@ -253,80 +296,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       _movingVertexId = null;
       _pendingConnectFromId = null;
     });
-  }
-
-  bool get _canUndoPathPoint =>
-      _mode == EditorMode.drawPath &&
-      (_pathStrokeVertexIds.isNotEmpty || _lastVertexId != null);
-
-  void _undo() {
-    if (_canUndoPathPoint) {
-      _undoLastPathPoint();
-      return;
-    }
-
-    setState(() {
-      if (_data.pois.isNotEmpty) {
-        final pois = List<MapPoi>.from(_data.pois)..removeLast();
-        final removed = _data.pois.last;
-        _data = _data.copyWith(pois: pois);
-        if (_selectedPoiId == removed.id) {
-          _selectedPoiId = null;
-        }
-      }
-    });
-  }
-
-  void _undoLastPathPoint() {
-    if (!_canUndoPathPoint) return;
-
-    setState(() {
-      final removedId = _pathStrokeVertexIds.isNotEmpty
-          ? _pathStrokeVertexIds.removeLast()
-          : _lastVertexId;
-      if (removedId == null) return;
-
-      final previousId =
-          _pathStrokeVertexIds.isNotEmpty ? _pathStrokeVertexIds.last : null;
-
-      var edges = List<MapEdge>.from(_data.edges);
-      if (previousId != null) {
-        edges.removeWhere((edge) => edge.fromId == previousId && edge.toId == removedId);
-      } else {
-        edges.removeWhere((edge) => edge.toId == removedId || edge.fromId == removedId);
-      }
-
-      var vertices = List<MapVertex>.from(_data.vertices);
-      final stillConnected = edges.any(
-        (edge) => edge.fromId == removedId || edge.toId == removedId,
-      );
-      if (!stillConnected) {
-        vertices.removeWhere((vertex) => vertex.id == removedId);
-      }
-
-      final pois = _data.pois.map((poi) {
-        if (poi.accessVertexId != removedId) {
-          final poiVertexId = findPoiVertexId(poi: poi, vertices: vertices);
-          if (poiVertexId != removedId) return poi;
-        }
-        return poi.copyWith(clearAccessVertexId: true);
-      }).toList();
-
-      _lastVertexId = previousId;
-      if (_selectedVertexId == removedId) {
-        _selectedVertexId = null;
-      }
-      if (_movingVertexId == removedId) {
-        _movingVertexId = null;
-      }
-
-      _data = _data.copyWith(vertices: vertices, edges: edges, pois: pois);
-    });
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sidste punkt fjernet')),
-    );
   }
 
   void _handleMapTap(LatLng coordinate) {
@@ -355,19 +324,21 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       return;
     }
 
-    if (_section == EditorSection.map ||
-        _section == EditorSection.audioTour ||
-        _section == EditorSection.treasureHunt) {
+    if (_activeSection == EditorSection.map ||
+        _activeSection == EditorSection.audioTour ||
+        _activeSection == EditorSection.treasureHunt) {
       return;
     }
 
     switch (_mode) {
+      case EditorMode.routesIdle:
+        return;
       case EditorMode.connectPoiToPath:
         _adjustPoiConnectionAt(lat, lng);
         setState(() {});
         return;
       case EditorMode.drawPath:
-        if (_section != EditorSection.routes) return;
+        if (_activeSection != EditorSection.routes) return;
         final tappedVertex = findNearestVertex(
           lat: lat,
           lng: lng,
@@ -384,11 +355,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         setState(() {});
         return;
       case EditorMode.addPlace:
-        if (_section != EditorSection.places) return;
+        if (_activeSection != EditorSection.places) return;
         _addPlaceAtMapLocation(lat, lng);
         return;
       case EditorMode.editPlace:
-        if (_section != EditorSection.places) return;
+        if (_activeSection != EditorSection.places) return;
         final poi = findNearestPoi(lat: lat, lng: lng, pois: _data.pois);
         if (poi != null) {
           _selectPoi(poi);
@@ -396,7 +367,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         setState(() {});
         return;
       case EditorMode.editConnections:
-        if (_section != EditorSection.routes) return;
+        if (_activeSection != EditorSection.routes) return;
         final spurHit = findPoiSpurNearTap(
           lat: lat,
           lng: lng,
@@ -746,11 +717,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
 
   void _handleVertexTapped(MapVertex vertex) {
     _suppressNextMapTap = true;
-    if (_section == EditorSection.routes && _mode == EditorMode.drawPath) {
+    if (_activeSection == EditorSection.routes && _mode == EditorMode.drawPath) {
       _handleVertexTapInDrawMode(vertex);
       return;
     }
-    if (_section == EditorSection.routes &&
+    if (_activeSection == EditorSection.routes &&
         (_mode == EditorMode.editConnections ||
             _mode == EditorMode.connectPoiToPath)) {
       final linkedPoi = findPoiForAccessVertex(
@@ -779,11 +750,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
 
   void _handlePoiTapped(MapPoi poi) {
     _suppressNextMapTap = true;
-    if (_section == EditorSection.places) {
+    if (_activeSection == EditorSection.places) {
       _selectPoi(poi);
       return;
     }
-    if (_section != EditorSection.routes) {
+    if (_activeSection != EditorSection.routes) {
       return;
     }
     if (_mode == EditorMode.connectPoiToPath) {
@@ -1048,7 +1019,9 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       );
       _poiConnectionDraft = null;
       _selectedPoiId = connectedPoi.id;
-      _mode = EditorMode.editConnections;
+      _mode = _activeSection == EditorSection.places
+          ? EditorMode.editPlace
+          : EditorMode.editConnections;
     });
 
     if (!mounted) return;
@@ -1058,23 +1031,40 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   }
 
   void _cancelPoiPathConnection({MapPoi? resumePoi, required bool wasNew}) {
+    final reopenSheet = resumePoi != null && _activeSection == EditorSection.places;
+
     setState(() {
       _poiConnectionDraft = null;
-      _mode = _inConnectionsFlow
-          ? EditorMode.editConnections
-          : EditorMode.editPlace;
+      _mode = _activeSection == EditorSection.places
+          ? EditorMode.editPlace
+          : EditorMode.editConnections;
       _selectedPoiId = resumePoi?.id;
     });
 
-    if (resumePoi != null && !_inConnectionsFlow) {
+    if (reopenSheet) {
+      final poi = resumePoi;
       unawaited(
         _showPoiSheet(
-          lat: resumePoi.lat,
-          lng: resumePoi.lng,
-          existing: wasNew ? null : resumePoi,
+          lat: poi.lat,
+          lng: poi.lng,
+          existing: wasNew ? null : poi,
         ),
       );
     }
+  }
+
+  Widget? _buildActivePoiConnectionToolbar() {
+    final draft = _poiConnectionDraft;
+    if (_mode != EditorMode.connectPoiToPath || draft == null) return null;
+
+    return _PoiConnectionToolbar(
+      distanceMeters: draft.snap.distanceMeters,
+      onConfirm: _confirmPoiPathConnection,
+      onCancel: () => _cancelPoiPathConnection(
+        resumePoi: draft.poi,
+        wasNew: draft.isNew,
+      ),
+    );
   }
 
   List<ll.LatLng> get _poiConnectionPreviewPoints {
@@ -1138,6 +1128,18 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
     }
 
     setState(() {
+      _mode = EditorMode.routesIdle;
+      _selectedPoiId = null;
+      _bulkConnectionPlan = null;
+      _poiConnectionDraft = null;
+    });
+  }
+
+  void _selectDrawPathTool() {
+    if (_mode == EditorMode.connectPoiToPath) {
+      _cancelPoiPathConnection(resumePoi: null, wasNew: false);
+    }
+    setState(() {
       _mode = EditorMode.drawPath;
       _selectedPoiId = null;
       _bulkConnectionPlan = null;
@@ -1157,7 +1159,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
 
       switch (section) {
         case EditorSection.routes:
-          _mode = EditorMode.drawPath;
+          _mode = EditorMode.routesIdle;
           _selectedPoiId = null;
         case EditorSection.places:
           _mode = EditorMode.editPlace;
@@ -1165,6 +1167,12 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
           _lastVertexId = null;
           _pathStrokeVertexIds.clear();
         case EditorSection.map:
+          _mapSectionMode = _MapSectionMode.area;
+          _mode = EditorMode.drawPath;
+          _selectedPoiId = null;
+          _lastVertexId = null;
+          _pathStrokeVertexIds.clear();
+          WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapSectionCamera());
         case EditorSection.audioTour:
         case EditorSection.treasureHunt:
           _mode = EditorMode.drawPath;
@@ -1173,14 +1181,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
           _pathStrokeVertexIds.clear();
       }
     });
-  }
-
-  void _changeMappingMethod() {
-    setState(() {
-      _isRecording = false;
-      _mappingMethod = null;
-    });
-    _positionSub?.cancel();
   }
 
   Future<void> _handlePoiConnectionTap(MapPoi poi) async {
@@ -1476,12 +1476,12 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       _previewIllustratedWhileDrawing = false;
     });
     if (method == MappingMethod.walk) {
-      _mode = EditorMode.drawPath;
+      _mode = EditorMode.routesIdle;
       _startLocationStream();
     } else {
       _positionSub?.cancel();
       _isRecording = false;
-      _mode = EditorMode.drawPath;
+      _mode = EditorMode.routesIdle;
     }
   }
 
@@ -1489,13 +1489,175 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
     if (!_data.event.hasIllustratedBasemap || !_showIllustratedBasemap) {
       return false;
     }
-    if (_section == EditorSection.map) {
-      return true;
+    if (_activeSection == EditorSection.map) {
+      return false;
     }
     if (_mappingMethod == MappingMethod.draw && !_previewIllustratedWhileDrawing) {
       return false;
     }
     return true;
+  }
+
+  bool get _isMapSection => _activeSection == EditorSection.map;
+
+  Future<void> _fitMapSectionCamera() async {
+    final controller = _mapController;
+    final bounds = _overlayEditBounds ?? _data.event.bounds;
+    if (!_isMapSection || controller == null || bounds == null || !bounds.isValid) {
+      return;
+    }
+
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        bounds.toLatLngBounds(),
+        left: 24,
+        top: 24,
+        right: 24,
+        bottom: 220,
+      ),
+    );
+    if (mounted) {
+      setState(() => _mapCameraRevision++);
+    }
+  }
+
+  void _onMapCameraMove() {
+    if (!_isMapSection) return;
+    _mapCameraThrottler.run(() {
+      if (!mounted) return;
+      setState(() => _mapCameraRevision++);
+    });
+  }
+
+  Future<void> _openOverlaySection() async {
+    if (_data.event.bounds == null || !_data.event.bounds!.isValid) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vælg først kortområde')),
+      );
+      await _openAreaSetup();
+      return;
+    }
+
+    if (!_data.event.hasIllustratedBasemap) {
+      await _addOverlayBasemap();
+      return;
+    }
+
+    await _enterOverlayEditMode();
+  }
+
+  Future<void> _addOverlayBasemap() async {
+    if (!mounted) return;
+    final saved = await pickAndAlignBasemap(
+      context,
+      eventId: widget.eventId,
+      eventName: _data.event.name,
+      bounds: _data.event.bounds!,
+      viewBounds: _data.event.navigationBounds,
+      fromEditor: true,
+    );
+    if (!saved || !mounted) return;
+
+    final refreshed = await _repository.loadForEdit(eventId: widget.eventId);
+    setState(() {
+      _data = refreshed;
+      _showIllustratedBasemap = true;
+      _mapSectionMode = _MapSectionMode.overlay;
+      _overlayEditBounds = refreshed.event.bounds;
+      _overlayImageBytes = null;
+    });
+    await _loadOverlayImageBytes();
+    await _fitMapSectionCamera();
+  }
+
+  Future<void> _enterOverlayEditMode() async {
+    setState(() {
+      _mapSectionMode = _MapSectionMode.overlay;
+      _overlayEditBounds = _data.event.bounds;
+      _overlayImageBytes = null;
+      _overlayImageLoading = true;
+    });
+    await _fitMapSectionCamera();
+    await _loadOverlayImageBytes();
+  }
+
+  Future<void> _loadOverlayImageBytes() async {
+    final url = _data.event.basemapUrl;
+    if (url == null || url.isEmpty) {
+      if (mounted) setState(() => _overlayImageLoading = false);
+      return;
+    }
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (!mounted) return;
+      if (response.statusCode != 200) {
+        throw StateError('HTTP ${response.statusCode}');
+      }
+      setState(() {
+        _overlayImageBytes = response.bodyBytes;
+        _overlayImageLoading = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() => _overlayImageLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kunne ikke hente overlay-kort')),
+      );
+    }
+  }
+
+  Future<void> _swapOverlayBasemap() async {
+    await _addOverlayBasemap();
+  }
+
+  Future<void> _saveOverlayPlacement() async {
+    final bounds = _overlayEditBounds;
+    if (bounds == null || !bounds.isValid) return;
+
+    setState(() => _overlaySaving = true);
+    try {
+      final expandedView = bounds.scaledAroundCenter(
+        AppConstants.areaViewBoundsExpansionFactor,
+      );
+      final viewBounds = (_data.event.viewBounds ?? expandedView).encompassing(expandedView);
+
+      await _repository.saveArea(
+        eventId: widget.eventId,
+        bounds: bounds,
+        viewBounds: viewBounds,
+        centerLat: bounds.centerLat,
+        centerLng: bounds.centerLng,
+      );
+
+      if (!mounted) return;
+      final refreshed = await _repository.loadForEdit(eventId: widget.eventId);
+      setState(() {
+        _data = refreshed;
+        _overlayEditBounds = refreshed.event.bounds;
+        _showIllustratedBasemap = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Overlay-placering gemt')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kunne ikke gemme: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _overlaySaving = false);
+    }
+  }
+
+  void _nudgeOverlayScale(double factor) {
+    final bounds = _overlayEditBounds;
+    if (bounds == null) return;
+    setState(() {
+      _overlayEditBounds = bounds.scaledAroundCenter(factor);
+      _mapCameraRevision++;
+    });
   }
 
   Future<void> _showPoiSheet({
@@ -1519,6 +1681,13 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       lng: lng,
       isNew: existing == null,
       mappingHint: mappingHint,
+      hasPaths: _data.edges.isNotEmpty,
+      hasActiveConnection: existing != null &&
+          poiHasActiveConnection(
+            poi: existing,
+            vertices: _data.vertices,
+            edges: _data.edges,
+          ),
     );
 
     if (result == null || !mounted) return;
@@ -1548,6 +1717,30 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
             content: Text('Tryk på kortet hvor pinnen skal stå — eller træk pinnen'),
           ),
         );
+        return;
+      case PoiEditorAction.connectToPath:
+        final connectPoi = result.poi;
+        if (connectPoi == null) return;
+        final savedPoi = accessVertexId != null
+            ? connectPoi.copyWith(accessVertexId: accessVertexId)
+            : connectPoi;
+        setState(() {
+          final pois = List<MapPoi>.from(_data.pois);
+          if (existing != null) {
+            final index = pois.indexWhere((p) => p.id == existing.id);
+            if (index >= 0) {
+              pois[index] = savedPoi;
+            } else {
+              pois.add(savedPoi);
+            }
+          } else {
+            pois.add(savedPoi);
+          }
+          _data = _data.copyWith(pois: pois);
+          _selectedPoiId = savedPoi.id;
+          _mode = EditorMode.editPlace;
+        });
+        await _beginPoiPathConnection(savedPoi, isNew: false);
         return;
       case PoiEditorAction.save:
         break;
@@ -1589,38 +1782,16 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
     );
     if (bounds == null || !mounted) return;
     final refreshed = await _repository.loadForEdit(eventId: widget.eventId);
-    setState(() => _data = refreshed);
-  }
-
-  Future<void> _uploadIllustratedBasemap() async {
-    if (_data.event.bounds == null || !_data.event.bounds!.isValid) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Vælg først kortområde'),
-        ),
-      );
-      await _openAreaSetup();
-      if (_data.event.bounds == null) return;
-    }
-
-    if (!mounted) return;
-    final saved = await pickAndAlignBasemap(
-      context,
-      eventId: widget.eventId,
-      eventName: _data.event.name,
-      bounds: _data.event.bounds!,
-      viewBounds: _data.event.navigationBounds,
-      fromEditor: true,
-    );
-    if (!saved || !mounted) return;
-
-    final refreshed = await _repository.loadForEdit(eventId: widget.eventId);
     setState(() {
       _data = refreshed;
-      _showIllustratedBasemap = true;
+      _mapSectionMode = _MapSectionMode.area;
     });
+    await _fitMapSectionCamera();
   }
+
+  Future<void> openAudioTourEditor() => _openAudioTourEditor();
+
+  Future<void> openTreasureHuntEditor() => _openTreasureHuntEditor();
 
   Future<void> _openTreasureHuntEditor() async {
     await Navigator.push<void>(
@@ -1629,7 +1800,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         builder: (context) => TreasureHuntEditorScreen(
           eventId: widget.eventId,
           mapData: _data,
-          onSaved: (updated) => setState(() => _data = updated),
+          useOrganizerShell: widget.embedded,
+          onSaved: (updated) {
+            setState(() => _data = updated);
+            _notifyDataChanged();
+          },
         ),
       ),
     );
@@ -1642,7 +1817,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         builder: (context) => AudioTourEditorScreen(
           eventId: widget.eventId,
           mapData: _data,
-          onSaved: (updated) => setState(() => _data = updated),
+          useOrganizerShell: widget.embedded,
+          onSaved: (updated) {
+            setState(() => _data = updated);
+            _notifyDataChanged();
+          },
         ),
       ),
     );
@@ -1676,24 +1855,33 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      final loading = const Center(child: CircularProgressIndicator());
+      return widget.embedded ? loading : Scaffold(body: loading);
     }
 
     final method = _mappingMethod;
     final statusText = _buildStatusText(method);
+    final editorBody = _buildEditorBody(context, method, statusText);
+
+    if (widget.embedded) {
+      return Column(
+        children: [
+          _buildEmbeddedToolbar(context),
+          Expanded(child: editorBody),
+        ],
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        leading: _inConnectionsFlow
+        leading: _inPoiConnectionFlow
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
-                tooltip: 'Tilbage til ruter',
+                tooltip: 'Tilbage til koblinger',
                 onPressed: _exitConnectionsMode,
               )
             : null,
-        title: Text(_inConnectionsFlow ? 'Koblinger' : _data.event.name),
+        title: Text(_inPoiConnectionFlow ? 'Kobl sted' : _data.event.name),
         actions: [
           if (_saving)
             const Padding(
@@ -1709,7 +1897,94 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
           TextButton(onPressed: _openPublish, child: const Text('Publicér')),
         ],
       ),
-      body: Column(
+      body: editorBody,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _section.index,
+        onDestinationSelected: (index) {
+          final section = EditorSection.values[index];
+          if (section == EditorSection.audioTour) {
+            _openAudioTourEditor();
+            return;
+          }
+          if (section == EditorSection.treasureHunt) {
+            _openTreasureHuntEditor();
+            return;
+          }
+          _onSectionChanged(section);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.route_outlined),
+            selectedIcon: Icon(Icons.route),
+            label: 'Ruter',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.place_outlined),
+            selectedIcon: Icon(Icons.place),
+            label: 'Steder',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.map_outlined),
+            selectedIcon: Icon(Icons.map),
+            label: 'Kort',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.headphones_outlined),
+            selectedIcon: Icon(Icons.headphones),
+            label: 'Lyd',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.flag_outlined),
+            selectedIcon: Icon(Icons.flag),
+            label: 'Skattejagt',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmbeddedToolbar(BuildContext context) {
+    return Material(
+      elevation: 1,
+      color: Theme.of(context).colorScheme.surface,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            children: [
+              if (_inPoiConnectionFlow)
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  tooltip: 'Tilbage til koblinger',
+                  onPressed: _exitConnectionsMode,
+                ),
+              const Spacer(),
+              if (_saving)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                TextButton(onPressed: _save, child: const Text('Gem')),
+              TextButton(onPressed: _openPublish, child: const Text('Publicér')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEditorBody(
+    BuildContext context,
+    MappingMethod? method,
+    String statusText,
+  ) {
+    return Column(
         children: [
           if (_error != null)
             MaterialBanner(
@@ -1724,13 +1999,26 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 EventMapWidget(
                   data: _mapDisplayData,
                   initialCenter: _mapCenter,
+                  cameraFitBounds: _isMapSection ? _data.event.bounds : null,
+                  boundsFitPadding: _isMapSection
+                      ? const EdgeInsets.fromLTRB(24, 24, 24, 220)
+                      : null,
+                  onMapCreated: (controller) {
+                    _mapController = controller;
+                    if (_isMapSection) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _fitMapSectionCamera();
+                      });
+                    }
+                  },
+                  onCameraMove: _onMapCameraMove,
                   myLocationEnabled:
-                      _section == EditorSection.routes && method == MappingMethod.walk,
+                      _activeSection == EditorSection.routes && method == MappingMethod.walk,
                   showIllustratedBasemap: _showBasemapOnMap,
                   illustratedMapOnly: _showBasemapOnMap,
-                  showEventPaths: true,
-                  showPathVertices: true,
-                  showPoiMarkers: true,
+                  showEventPaths: !_isMapSection,
+                  showPathVertices: !_isMapSection,
+                  showPoiMarkers: !_isMapSection,
                   selectedPoiId: _selectedPoiId,
                   selectedVertexId: _selectedVertexId,
                   previewLines: _mapPreviewLines,
@@ -1738,12 +2026,58 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                   poiDraggable: _mode == EditorMode.editPlace ||
                       _mode == EditorMode.connectPoiToPath,
                   vertexDraggable: _movingVertexId != null,
-                  onMapTap: _handleMapTap,
-                  onPoiTapped: _handlePoiTapped,
-                  onPoiMoved: _handlePoiMoved,
-                  onVertexTapped: _handleVertexTapped,
-                  onVertexMoved: _handleVertexMoved,
+                  onMapTap: _isMapSection ? null : _handleMapTap,
+                  onPoiTapped: _isMapSection ? null : _handlePoiTapped,
+                  onPoiMoved: _isMapSection ? null : _handlePoiMoved,
+                  onVertexTapped: _isMapSection ? null : _handleVertexTapped,
+                  onVertexMoved: _isMapSection ? null : _handleVertexMoved,
                 ),
+                if (_isMapSection &&
+                    _mapSectionMode == _MapSectionMode.area &&
+                    _data.event.bounds?.isValid == true)
+                  MapAreaBoundsFrame(
+                    controller: _mapController,
+                    bounds: _data.event.bounds!,
+                    revision: _mapCameraRevision,
+                  ),
+                if (_isMapSection &&
+                    _mapSectionMode == _MapSectionMode.overlay &&
+                    _overlayImageBytes != null &&
+                    _overlayEditBounds != null)
+                  MapOverlayAlignmentLayer(
+                    controller: _mapController,
+                    imageBytes: _overlayImageBytes!,
+                    bounds: _overlayEditBounds!,
+                    opacity: _overlayOpacity,
+                    revision: _mapCameraRevision,
+                    onBoundsChanged: (bounds) => setState(() => _overlayEditBounds = bounds),
+                  ),
+                if (_isMapSection &&
+                    _mapSectionMode == _MapSectionMode.overlay &&
+                    _data.event.hasIllustratedBasemap)
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: Material(
+                      elevation: 3,
+                      shape: const CircleBorder(),
+                      color: Colors.white,
+                      child: IconButton(
+                        tooltip: 'Skift overlay-kort',
+                        icon: const Icon(Icons.swap_horiz),
+                        onPressed: _overlayImageLoading ? null : _swapOverlayBasemap,
+                      ),
+                    ),
+                  ),
+                if (_isMapSection &&
+                    _mapSectionMode == _MapSectionMode.overlay &&
+                    _overlayImageLoading)
+                  const Positioned.fill(
+                    child: ColoredBox(
+                      color: Color(0x88FFFFFF),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  ),
                 if (_showBasemapOnMap && method == MappingMethod.draw)
                   Positioned(
                     top: 12,
@@ -1792,41 +2126,13 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                       ),
                     ),
                   ),
-                if (method == null && _section == EditorSection.routes)
+                if (method == null && _activeSection == EditorSection.routes)
                   Positioned.fill(
                     child: ColoredBox(
                       color: Colors.black54,
                       child: Center(
                         child: _MappingMethodPicker(
                           onSelected: _selectMappingMethod,
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_section == EditorSection.routes &&
-                    ((method == MappingMethod.draw && _mode == EditorMode.drawPath) ||
-                        (method == MappingMethod.walk && _isRecording)) &&
-                    _canUndoPathPoint)
-                  Positioned(
-                    right: 16,
-                    bottom: 16,
-                    child: Material(
-                      elevation: 4,
-                      shape: const CircleBorder(),
-                      color: Colors.white,
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _undoLastPathPoint,
-                        child: Tooltip(
-                          message: 'Fortryd sidste punkt',
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Icon(
-                              Icons.undo,
-                              color: Theme.of(context).colorScheme.primary,
-                              size: 26,
-                            ),
-                          ),
                         ),
                       ),
                     ),
@@ -1847,56 +2153,18 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
             ),
           ),
         ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _section.index,
-        onDestinationSelected: (index) {
-          final section = EditorSection.values[index];
-          if (section == EditorSection.audioTour) {
-            _openAudioTourEditor();
-            return;
-          }
-          if (section == EditorSection.treasureHunt) {
-            _openTreasureHuntEditor();
-            return;
-          }
-          _onSectionChanged(section);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.route_outlined),
-            selectedIcon: Icon(Icons.route),
-            label: 'Ruter',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.place_outlined),
-            selectedIcon: Icon(Icons.place),
-            label: 'Steder',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            selectedIcon: Icon(Icons.map),
-            label: 'Kort',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.headphones_outlined),
-            selectedIcon: Icon(Icons.headphones),
-            label: 'Lydvandringer',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.flag_outlined),
-            selectedIcon: Icon(Icons.flag),
-            label: 'Skattejagt',
-          ),
-        ],
-      ),
-    );
+      );
   }
 
   String _buildStatusText(MappingMethod? method) {
-    switch (_section) {
+    switch (_activeSection) {
       case EditorSection.map:
-        return 'Tilpas kortområde og illustreret overlay-kort';
+        if (_mapSectionMode == _MapSectionMode.area) {
+          return _data.event.bounds?.isValid == true
+              ? 'Det aktive kortområde — tryk «Overlay-kort» for at tilføje tegning'
+              : 'Vælg først kortområde og udsnit';
+        }
+        return 'Træk og skaler overlay-kortet — gem når det matcher kortet';
       case EditorSection.audioTour:
         final count = _data.audioTourCatalog.tours.length;
         return count == 0
@@ -1908,6 +2176,9 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
             ? 'Opret skattejagter med poster på kortet'
             : '$huntCount skattejagt${huntCount == 1 ? '' : 'er'}';
       case EditorSection.places:
+        if (_mode == EditorMode.connectPoiToPath) {
+          return 'Tryk «Bekræft tilkobling» når koblingsstien ser rigtig ud';
+        }
         if (_mode == EditorMode.addPlace) {
           return 'Tryk på kortet hvor stedet skal stå';
         }
@@ -1933,6 +2204,9 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         if (_mode == EditorMode.editConnections) {
           return 'Tryk på et sted eller dets koblingssti for at rette';
         }
+        if (_mode == EditorMode.routesIdle) {
+          return 'Vælg «Tegn sti» eller «Koblinger» for at komme i gang';
+        }
         if (_movingVertexId != null) {
           return 'Træk stipunktet eller tryk hvor det skal stå';
         }
@@ -1950,7 +2224,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   }
 
   Widget _buildSectionPanel(MappingMethod? method) {
-    switch (_section) {
+    switch (_activeSection) {
       case EditorSection.routes:
         if (_bulkConnectionPlan != null) {
           return _BulkConnectionPreviewToolbar(
@@ -1959,41 +2233,55 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
             onDismiss: _clearBulkConnectionPreview,
           );
         }
-        if (_mode == EditorMode.connectPoiToPath && _poiConnectionDraft != null) {
-          return _PoiConnectionToolbar(
-            distanceMeters: _poiConnectionDraft!.snap.distanceMeters,
-            onConfirm: _confirmPoiPathConnection,
-            onCancel: () => _cancelPoiPathConnection(
-              resumePoi: _poiConnectionDraft!.poi,
-              wasNew: _poiConnectionDraft!.isNew,
-            ),
-          );
-        }
-        if (_mode == EditorMode.editConnections) {
-          return PoiConnectionsPanel(
-            pois: _data.pois,
-            vertices: _data.vertices,
-            edges: _data.edges,
-            selectedPoiId: _selectedPoiId,
-            onConnectAll: _proposeAllPoiConnections,
-            onPoiSelected: (poi) => setState(() => _selectedPoiId = poi.id),
-            onConnectPoi: _connectPoiFromPanel,
-            onMoveConnection: _movePoiConnectionFromPanel,
-            onRemoveConnection: _removePoiConnectionFromPanel,
-          );
-        }
         if (method == null) return const SizedBox.shrink();
-        return _RoutesToolbar(
-          mappingMethod: method,
-          isRecording: _isRecording,
-          pathActive: _lastVertexId != null,
-          onToggleRecording: _toggleRecording,
-          onChangeMethod: _changeMappingMethod,
-          onEnterConnections: _enterConnectionsMode,
-          onFinishPath: _finishPath,
-          onUndo: _undo,
+        if (_mode == EditorMode.connectPoiToPath && _poiConnectionDraft != null) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _RoutesToolbar(
+                mode: _mode,
+                mappingMethod: method,
+                isRecording: _isRecording,
+                pathActive: _lastVertexId != null,
+                onSelectDrawPath: _selectDrawPathTool,
+                onSelectConnections: _enterConnectionsMode,
+                onToggleRecording: _toggleRecording,
+                onFinishPath: _finishPath,
+              ),
+              _buildActivePoiConnectionToolbar()!,
+            ],
+          );
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _RoutesToolbar(
+              mode: _mode,
+              mappingMethod: method,
+              isRecording: _isRecording,
+              pathActive: _lastVertexId != null,
+              onSelectDrawPath: _selectDrawPathTool,
+              onSelectConnections: _enterConnectionsMode,
+              onToggleRecording: _toggleRecording,
+              onFinishPath: _finishPath,
+            ),
+            if (_mode == EditorMode.editConnections)
+              PoiConnectionsPanel(
+                pois: _data.pois,
+                vertices: _data.vertices,
+                edges: _data.edges,
+                selectedPoiId: _selectedPoiId,
+                onConnectAll: _proposeAllPoiConnections,
+                onPoiSelected: (poi) => setState(() => _selectedPoiId = poi.id),
+                onConnectPoi: _connectPoiFromPanel,
+                onMoveConnection: _movePoiConnectionFromPanel,
+                onRemoveConnection: _removePoiConnectionFromPanel,
+              ),
+          ],
         );
       case EditorSection.places:
+        final connectionToolbar = _buildActivePoiConnectionToolbar();
+        if (connectionToolbar != null) return connectionToolbar;
         return _PlacesToolbar(
           mode: _mode,
           walkRecording: method == MappingMethod.walk && _isRecording,
@@ -2005,14 +2293,15 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         );
       case EditorSection.map:
         return _MapSectionPanel(
+          mapMode: _mapSectionMode,
           hasIllustratedBasemap: _data.event.hasIllustratedBasemap,
-          basemapVisible: _showBasemapOnMap,
+          overlaySaving: _overlaySaving,
+          overlayOpacity: _overlayOpacity,
           onAreaSetup: _openAreaSetup,
-          onUploadBasemap: _uploadIllustratedBasemap,
-          onToggleBasemap: () => setState(() {
-            _showIllustratedBasemap = !_showIllustratedBasemap;
-            _previewIllustratedWhileDrawing = _showIllustratedBasemap;
-          }),
+          onOpenOverlay: _openOverlaySection,
+          onSaveOverlay: _saveOverlayPlacement,
+          onOverlayOpacityChanged: (value) => setState(() => _overlayOpacity = value),
+          onNudgeOverlayScale: _nudgeOverlayScale,
         );
       case EditorSection.audioTour:
         return _AudioTourSectionPanel(
@@ -2052,7 +2341,7 @@ class _MappingMethodPicker extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Vælg én metode — du kan skifte senere under fanen Ruter.',
+              'Vælg én metode for at komme i gang.',
               style: theme.textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
@@ -2118,119 +2407,102 @@ class _MethodOptionCard extends StatelessWidget {
 
 class _RoutesToolbar extends StatelessWidget {
   const _RoutesToolbar({
+    required this.mode,
     required this.mappingMethod,
     required this.isRecording,
     required this.pathActive,
+    required this.onSelectDrawPath,
+    required this.onSelectConnections,
     required this.onToggleRecording,
-    required this.onChangeMethod,
-    required this.onEnterConnections,
     required this.onFinishPath,
-    required this.onUndo,
   });
 
+  final EditorMode mode;
   final MappingMethod mappingMethod;
   final bool isRecording;
   final bool pathActive;
+  final VoidCallback onSelectDrawPath;
+  final VoidCallback onSelectConnections;
   final VoidCallback onToggleRecording;
-  final VoidCallback onChangeMethod;
-  final VoidCallback onEnterConnections;
   final VoidCallback onFinishPath;
-  final VoidCallback onUndo;
+
+  bool get _drawSelected =>
+      mode == EditorMode.drawPath ||
+      (mappingMethod == MappingMethod.walk && isRecording);
+
+  bool get _connectionsSelected =>
+      mode == EditorMode.editConnections || mode == EditorMode.connectPoiToPath;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final drawLabel = mappingMethod == MappingMethod.walk
+        ? (isRecording ? 'Stop mapping' : 'Gå ruten')
+        : 'Tegn sti';
+    final drawIcon = mappingMethod == MappingMethod.walk
+        ? (isRecording ? Icons.stop : Icons.directions_walk)
+        : Icons.timeline;
+
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-        child: mappingMethod == MappingMethod.walk
-            ? Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: onToggleRecording,
-                          icon: Icon(isRecording ? Icons.stop : Icons.directions_walk),
-                          label: Text(isRecording ? 'Stop mapping' : 'Start mapping'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: isRecording ? Colors.red.shade700 : null,
-                          ),
-                        ),
-                      ),
-                      IconButton(onPressed: onUndo, icon: const Icon(Icons.undo)),
-                    ],
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: mappingMethod == MappingMethod.walk
+                        ? () {
+                            if (!_drawSelected) {
+                              onSelectDrawPath();
+                            }
+                            onToggleRecording();
+                          }
+                        : onSelectDrawPath,
+                    icon: Icon(drawIcon),
+                    label: Text(drawLabel),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _drawSelected
+                          ? (isRecording
+                              ? Colors.red.shade700
+                              : theme.colorScheme.primary)
+                          : theme.colorScheme.surfaceContainerHighest,
+                      foregroundColor: _drawSelected
+                          ? (isRecording
+                              ? Colors.white
+                              : theme.colorScheme.onPrimary)
+                          : theme.colorScheme.onSurface,
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  _RoutesSecondaryActions(
-                    onChangeMethod: onChangeMethod,
-                    onEnterConnections: onEnterConnections,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onSelectConnections,
+                    icon: const Icon(Icons.link),
+                    label: const Text('Koblinger'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _connectionsSelected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.surfaceContainerHighest,
+                      foregroundColor: _connectionsSelected
+                          ? theme.colorScheme.onPrimary
+                          : theme.colorScheme.onSurface,
+                    ),
                   ),
-                ],
-              )
-            : Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: () {},
-                          icon: const Icon(Icons.timeline),
-                          label: const Text('Tegn sti'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.primary,
-                            foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (pathActive)
-                        TextButton(onPressed: onFinishPath, child: const Text('Afslut sti'))
-                      else
-                        IconButton(onPressed: onUndo, icon: const Icon(Icons.undo)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _RoutesSecondaryActions(
-                    onChangeMethod: onChangeMethod,
-                    onEnterConnections: onEnterConnections,
-                  ),
-                ],
+                ),
+              ],
+            ),
+            if (pathActive && _drawSelected && mappingMethod == MappingMethod.draw)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(onPressed: onFinishPath, child: const Text('Afslut sti')),
               ),
+          ],
+        ),
       ),
-    );
-  }
-}
-
-class _RoutesSecondaryActions extends StatelessWidget {
-  const _RoutesSecondaryActions({
-    required this.onChangeMethod,
-    required this.onEnterConnections,
-  });
-
-  final VoidCallback onChangeMethod;
-  final VoidCallback onEnterConnections;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onEnterConnections,
-            icon: const Icon(Icons.link),
-            label: const Text('Koblinger'),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: onChangeMethod,
-            icon: const Icon(Icons.swap_horiz),
-            label: const Text('Metode'),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -2256,40 +2528,21 @@ class _PlacesToolbar extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
         child: Column(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () => onModeChanged(EditorMode.addPlace),
-                    icon: const Icon(Icons.add_location_alt),
-                    label: const Text('Tilføj sted'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: mode == EditorMode.addPlace
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.surfaceContainerHighest,
-                      foregroundColor: mode == EditorMode.addPlace
-                          ? Theme.of(context).colorScheme.onPrimary
-                          : Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => onModeChanged(EditorMode.addPlace),
+                icon: const Icon(Icons.add_location_alt),
+                label: const Text('Tilføj sted'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: mode == EditorMode.addPlace
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  foregroundColor: mode == EditorMode.addPlace
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.onSurface,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () => onModeChanged(EditorMode.editPlace),
-                    icon: const Icon(Icons.edit_location_alt_outlined),
-                    label: const Text('Rediger sted'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: mode == EditorMode.editPlace
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.surfaceContainerHighest,
-                      foregroundColor: mode == EditorMode.editPlace
-                          ? Theme.of(context).colorScheme.onPrimary
-                          : Theme.of(context).colorScheme.onSurface,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
             if (walkRecording) ...[
               const SizedBox(height: 8),
@@ -2311,18 +2564,26 @@ class _PlacesToolbar extends StatelessWidget {
 
 class _MapSectionPanel extends StatelessWidget {
   const _MapSectionPanel({
+    required this.mapMode,
     required this.hasIllustratedBasemap,
-    required this.basemapVisible,
+    required this.overlaySaving,
+    required this.overlayOpacity,
     required this.onAreaSetup,
-    required this.onUploadBasemap,
-    required this.onToggleBasemap,
+    required this.onOpenOverlay,
+    required this.onSaveOverlay,
+    required this.onOverlayOpacityChanged,
+    required this.onNudgeOverlayScale,
   });
 
+  final _MapSectionMode mapMode;
   final bool hasIllustratedBasemap;
-  final bool basemapVisible;
+  final bool overlaySaving;
+  final double overlayOpacity;
   final Future<void> Function() onAreaSetup;
-  final Future<void> Function() onUploadBasemap;
-  final VoidCallback onToggleBasemap;
+  final Future<void> Function() onOpenOverlay;
+  final Future<void> Function() onSaveOverlay;
+  final ValueChanged<double> onOverlayOpacityChanged;
+  final void Function(double factor) onNudgeOverlayScale;
 
   @override
   Widget build(BuildContext context) {
@@ -2333,25 +2594,70 @@ class _MapSectionPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            FilledButton.tonalIcon(
-              onPressed: onAreaSetup,
-              icon: const Icon(Icons.crop_free),
-              label: const Text('Kortområde og udsnit'),
-            ),
-            const SizedBox(height: 8),
-            FilledButton.tonalIcon(
-              onPressed: onUploadBasemap,
-              icon: const Icon(Icons.image_outlined),
-              label: Text(
-                hasIllustratedBasemap ? 'Skift overlay-kort' : 'Upload overlay-kort',
+            if (mapMode == _MapSectionMode.area) ...[
+              FilledButton.tonalIcon(
+                onPressed: onAreaSetup,
+                icon: const Icon(Icons.crop_free),
+                label: const Text('Kortområde og udsnit'),
               ),
-            ),
-            if (hasIllustratedBasemap) ...[
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: onToggleBasemap,
-                icon: Icon(basemapVisible ? Icons.layers : Icons.layers_outlined),
-                label: Text(basemapVisible ? 'Skjul overlay-kort' : 'Vis overlay-kort'),
+              FilledButton.tonalIcon(
+                onPressed: onOpenOverlay,
+                icon: const Icon(Icons.layers_outlined),
+                label: Text(
+                  hasIllustratedBasemap ? 'Overlay-kort' : 'Tilføj overlay-kort',
+                ),
+              ),
+            ] else ...[
+              FilledButton.tonalIcon(
+                onPressed: onOpenOverlay,
+                icon: const Icon(Icons.layers_outlined),
+                label: const Text('Overlay-kort'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.opacity, size: 20),
+                  Expanded(
+                    child: Slider(
+                      value: overlayOpacity,
+                      min: 0.2,
+                      max: 0.85,
+                      label: '${(overlayOpacity * 100).round()}%',
+                      onChanged: onOverlayOpacityChanged,
+                    ),
+                  ),
+                  Text('${(overlayOpacity * 100).round()}%'),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton.filledTonal(
+                    tooltip: 'Gør overlay mindre',
+                    onPressed: () => onNudgeOverlayScale(1.05),
+                    icon: const Icon(Icons.remove),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Skaler', style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    tooltip: 'Gør overlay større',
+                    onPressed: () => onNudgeOverlayScale(0.95),
+                    icon: const Icon(Icons.add),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: overlaySaving ? null : onSaveOverlay,
+                child: overlaySaving
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Gem overlay-placering'),
               ),
             ],
           ],

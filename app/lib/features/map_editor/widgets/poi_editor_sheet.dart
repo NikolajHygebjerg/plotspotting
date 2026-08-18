@@ -13,6 +13,7 @@ enum PoiEditorAction {
   save,
   delete,
   movePin,
+  connectToPath,
 }
 
 class PoiEditorSheetResult {
@@ -36,6 +37,8 @@ class PoiEditorSheet extends StatefulWidget {
     required this.lng,
     required this.isNew,
     required this.mappingHint,
+    required this.hasPaths,
+    required this.hasActiveConnection,
   });
 
   final String eventId;
@@ -45,6 +48,8 @@ class PoiEditorSheet extends StatefulWidget {
   final double lng;
   final bool isNew;
   final String? mappingHint;
+  final bool hasPaths;
+  final bool hasActiveConnection;
 
   static Future<PoiEditorSheetResult?> show(
     BuildContext context, {
@@ -55,11 +60,15 @@ class PoiEditorSheet extends StatefulWidget {
     required double lng,
     required bool isNew,
     String? mappingHint,
+    required bool hasPaths,
+    required bool hasActiveConnection,
   }) {
     return showModalBottomSheet<PoiEditorSheetResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      isDismissible: false,
+      enableDrag: false,
       builder: (context) {
         return Padding(
           padding: EdgeInsets.only(
@@ -73,6 +82,8 @@ class PoiEditorSheet extends StatefulWidget {
             lng: lng,
             isNew: isNew,
             mappingHint: mappingHint,
+            hasPaths: hasPaths,
+            hasActiveConnection: hasActiveConnection,
           ),
         );
       },
@@ -96,6 +107,7 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
   late final String _poiId;
 
   var _category = 'home';
+  late final _PoiFormSnapshot _initialSnapshot;
 
   @override
   void initState() {
@@ -118,6 +130,8 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
     } else {
       _addOccupantRow();
     }
+
+    _initialSnapshot = _captureSnapshot();
   }
 
   @override
@@ -183,6 +197,27 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
     );
   }
 
+  _PoiFormSnapshot _captureSnapshot() {
+    final occupants = <String>[];
+    for (var index = 0; index < _occupantControllers.length; index++) {
+      occupants.add(
+        '${_occupantKinds[index].name}:${_occupantControllers[index].text.trim()}',
+      );
+    }
+
+    return _PoiFormSnapshot(
+      name: _nameController.text.trim(),
+      houseNumber: _houseController.text.trim(),
+      description: _descriptionController.text.trim(),
+      searchKeywords: _keywordsController.text.trim(),
+      category: _category,
+      occupants: occupants,
+      mediaIds: _mediaController.media.map((item) => item.id).toList()..sort(),
+    );
+  }
+
+  bool _hasUnsavedChanges() => !_captureSnapshot().equals(_initialSnapshot);
+
   bool _validateForm() {
     final hasAddress = _houseController.text.trim().isNotEmpty;
     final hasOccupant =
@@ -196,6 +231,74 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
       ),
     );
     return false;
+  }
+
+  Future<void> _closeWithoutSaving() async {
+    if (!mounted) return;
+    Navigator.pop(
+      context,
+      const PoiEditorSheetResult(action: PoiEditorAction.cancel),
+    );
+  }
+
+  Future<void> _saveAndClose() async {
+    if (!_validateForm()) return;
+    if (!mounted) return;
+    Navigator.pop(
+      context,
+      PoiEditorSheetResult(
+        action: PoiEditorAction.save,
+        poi: _buildPoi(),
+      ),
+    );
+  }
+
+  void _connectToPath() {
+    if (!widget.hasPaths) return;
+    if (!_validateForm()) return;
+    Navigator.pop(
+      context,
+      PoiEditorSheetResult(
+        action: PoiEditorAction.connectToPath,
+        poi: _buildPoi(),
+      ),
+    );
+  }
+
+  Future<void> _requestClose() async {
+    if (!_hasUnsavedChanges()) {
+      await _closeWithoutSaving();
+      return;
+    }
+
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gem ændringer?'),
+        content: const Text('Du har ændringer der ikke er gemt.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuller'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Gem ikke'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Gem'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || save == null) return;
+    if (save) {
+      await _saveAndClose();
+    } else {
+      await _closeWithoutSaving();
+    }
   }
 
   Future<void> _deletePoi() async {
@@ -221,16 +324,33 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
   Widget build(BuildContext context) {
     final existing = widget.existing;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            widget.isNew ? 'Nyt sted' : 'Rediger sted',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _requestClose();
+      },
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.isNew ? 'Nyt sted' : 'Rediger sted',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Luk',
+                  onPressed: _requestClose,
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
           if (widget.mappingHint != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -379,18 +499,17 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
           ),
           const SizedBox(height: 16),
           FilledButton(
-            onPressed: () {
-              if (!_validateForm()) return;
-              Navigator.pop(
-                context,
-                PoiEditorSheetResult(
-                  action: PoiEditorAction.save,
-                  poi: _buildPoi(),
-                ),
-              );
-            },
+            onPressed: _saveAndClose,
             child: const Text('Gem sted'),
           ),
+          if (widget.hasPaths && !widget.hasActiveConnection) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _connectToPath,
+              icon: const Icon(Icons.link),
+              label: const Text('Kobl til sti'),
+            ),
+          ],
           if (existing != null) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -414,6 +533,45 @@ class _PoiEditorSheetState extends State<PoiEditorSheet> {
           ],
         ],
       ),
+    ),
     );
+  }
+}
+
+class _PoiFormSnapshot {
+  const _PoiFormSnapshot({
+    required this.name,
+    required this.houseNumber,
+    required this.description,
+    required this.searchKeywords,
+    required this.category,
+    required this.occupants,
+    required this.mediaIds,
+  });
+
+  final String name;
+  final String houseNumber;
+  final String description;
+  final String searchKeywords;
+  final String category;
+  final List<String> occupants;
+  final List<String> mediaIds;
+
+  bool equals(_PoiFormSnapshot other) {
+    return name == other.name &&
+        houseNumber == other.houseNumber &&
+        description == other.description &&
+        searchKeywords == other.searchKeywords &&
+        category == other.category &&
+        _listEquals(occupants, other.occupants) &&
+        _listEquals(mediaIds, other.mediaIds);
+  }
+
+  bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 }

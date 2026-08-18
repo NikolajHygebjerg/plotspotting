@@ -13,8 +13,19 @@ abstract final class AppConfig {
   static bool get isSupabaseConfigured =>
       _loaded &&
       supabaseUrl.isNotEmpty &&
-      supabaseAnonKey.isNotEmpty &&
-      supabaseAnonKey != 'REPLACE_WITH_ANON_KEY';
+      _looksLikeSupabaseAnonKey(supabaseAnonKey);
+
+  /// Supabase anon keys are JWTs (eyJ…) — reject placeholders like "test".
+  static bool _looksLikeSupabaseAnonKey(String key) {
+    const placeholders = {
+      'REPLACE_WITH_ANON_KEY',
+      'test',
+      'your-anon-key',
+      'YOUR_ANON_KEY',
+    };
+    if (key.isEmpty || placeholders.contains(key)) return false;
+    return key.startsWith('eyJ') && key.length > 80;
+  }
 
   /// Canonical base for published map links, e.g. https://plotspotting.vercel.app/e
   static String get publicEventBaseUrl {

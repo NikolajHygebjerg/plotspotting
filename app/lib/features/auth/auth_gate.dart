@@ -7,17 +7,31 @@ import '../home/home_screen.dart';
 import 'sign_in_screen.dart';
 import 'sign_up_screen.dart';
 
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  final _auth = AuthRepository();
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AuthState>(
-      stream: AuthRepository().authStateChanges,
+      stream: _auth.authStateChanges,
       builder: (context, snapshot) {
-        final session = snapshot.data?.session;
-        if (session != null) {
-          return const HomeScreen();
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _auth.currentUser == null) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final user = snapshot.data?.session?.user ?? _auth.currentUser;
+        if (user != null) {
+          return HomeScreen(key: ValueKey(user.id));
         }
         return const AuthWelcomeScreen();
       },

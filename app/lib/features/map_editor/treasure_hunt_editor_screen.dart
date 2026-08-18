@@ -17,6 +17,7 @@ import '../../data/models/poi_media.dart';
 import '../../data/models/treasure_hunt.dart';
 import '../../data/repositories/event_repository.dart';
 import '../../widgets/event_map_widget.dart';
+import '../organizer/organizer_shell.dart';
 import 'widgets/treasure_hunt_post_editor_sheet.dart';
 import 'widgets/treasure_hunt_post_overlay.dart';
 
@@ -31,11 +32,13 @@ class TreasureHuntEditorScreen extends StatefulWidget {
     required this.eventId,
     required this.mapData,
     required this.onSaved,
+    this.useOrganizerShell = false,
   });
 
   final String eventId;
   final EventMapData mapData;
   final ValueChanged<EventMapData> onSaved;
+  final bool useOrganizerShell;
 
   @override
   State<TreasureHuntEditorScreen> createState() =>
@@ -462,11 +465,32 @@ class _TreasureHuntEditorScreenState extends State<TreasureHuntEditorScreen> {
     }
   }
 
+  PreferredSizeWidget _buildAppBar() {
+    final actions = [
+      if (_saving)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        )
+      else if (_hunts.isNotEmpty)
+        TextButton(onPressed: _save, child: const Text('Gem')),
+    ];
+
+    if (widget.useOrganizerShell) {
+      return OrganizerShellAppBar(title: 'Skattejagt', actions: actions);
+    }
+    return AppBar(title: const Text('Skattejagt'), actions: actions);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_hunts.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Skattejagt')),
+        appBar: _buildAppBar(),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -506,22 +530,7 @@ class _TreasureHuntEditorScreenState extends State<TreasureHuntEditorScreen> {
     final orderedPosts = _orderedPosts;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Skattejagt'),
-        actions: [
-          if (_saving)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            TextButton(onPressed: _save, child: const Text('Gem')),
-        ],
-      ),
+      appBar: _buildAppBar(),
       body: Column(
         children: [
           if (_error != null)

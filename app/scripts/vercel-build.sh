@@ -12,6 +12,11 @@ cat > assets/env.json <<EOF
 }
 EOF
 
+if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+  echo "ERROR: SUPABASE_URL and SUPABASE_ANON_KEY must be set in Vercel environment variables."
+  exit 1
+fi
+
 if ! command -v flutter >/dev/null 2>&1; then
   echo "Installing Flutter SDK..."
   git clone https://github.com/flutter/flutter.git -b stable --depth 1 /tmp/flutter
@@ -22,4 +27,5 @@ fi
 
 flutter --version
 flutter pub get
+dart run flutter_native_splash:create
 flutter build web --release

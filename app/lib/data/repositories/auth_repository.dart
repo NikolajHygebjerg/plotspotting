@@ -71,6 +71,30 @@ class AuthRepository {
     await _client.auth.signOut();
   }
 
+  Future<void> updateDisplayName(String displayName) async {
+    final user = currentUser;
+    if (user == null) throw StateError('not_authenticated');
+
+    final trimmed = displayName.trim();
+    await _client.auth.updateUser(
+      UserAttributes(data: {'display_name': trimmed}),
+    );
+    await _client.from('profiles').update({'display_name': trimmed}).eq('id', user.id);
+  }
+
+  Future<void> updateEmail(String email) async {
+    await _client.auth.updateUser(UserAttributes(email: email.trim()));
+  }
+
+  Future<void> updatePassword(String password) async {
+    await _client.auth.updateUser(UserAttributes(password: password));
+  }
+
+  Future<void> deleteAccount() async {
+    await _client.rpc('delete_my_account');
+    await signOut();
+  }
+
   Future<void> bootstrapAccount({String? displayName}) async {
     if (!isSignedIn) return;
     await _client.rpc(

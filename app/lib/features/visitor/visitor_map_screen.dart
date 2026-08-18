@@ -44,6 +44,7 @@ class VisitorMapScreen extends StatefulWidget {
     this.audioTourConfig,
     this.initialSearch,
     this.embed = false,
+    this.organizerPreview = false,
   });
 
   final EventMapData mapData;
@@ -51,6 +52,7 @@ class VisitorMapScreen extends StatefulWidget {
   final AudioTourConfig? audioTourConfig;
   final String? initialSearch;
   final bool embed;
+  final bool organizerPreview;
 
   @override
   State<VisitorMapScreen> createState() => _VisitorMapScreenState();
@@ -124,8 +126,13 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         );
       }
     }
-    _loadFavorites();
-    _startTracking();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadFavorites();
+      if (!widget.organizerPreview) {
+        _startTracking();
+      }
+    });
   }
 
   @override
@@ -524,6 +531,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
   void _backToExperiencePicker() {
     _audioTourController?.startTour();
+    if (widget.organizerPreview) {
+      Navigator.pop(context);
+      return;
+    }
     final options = availableExperiences(_data);
     if (options.length <= 1) {
       Navigator.pop(context);
@@ -826,8 +837,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                           : null,
                       constrainToEventBounds: true,
                       boundsFitPadding: _mapFitPadding(context),
-                      myLocationEnabled: true,
-                      myLocationRenderMode: MyLocationRenderMode.compass,
+                      myLocationEnabled: !widget.organizerPreview,
+                      myLocationRenderMode: !widget.organizerPreview
+                          ? MyLocationRenderMode.compass
+                          : MyLocationRenderMode.normal,
                       myLocationTrackingMode: _isNavigating
                           ? MyLocationTrackingMode.trackingCompass
                           : MyLocationTrackingMode.none,

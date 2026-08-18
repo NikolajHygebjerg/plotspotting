@@ -11,6 +11,7 @@ import '../core/constants.dart';
 import '../core/geo/geo_utils.dart';
 import '../core/utils/debounce.dart';
 import '../data/models/event_map_data.dart';
+import '../data/models/map_bounds.dart';
 import '../data/models/map_edge.dart';
 import '../data/models/map_poi.dart';
 import '../data/models/map_vertex.dart';
@@ -43,7 +44,9 @@ class EventMapWidget extends StatefulWidget {
     this.onVertexTapped,
     this.onVertexMoved,
     this.onMapCreated,
+    this.onCameraMove,
     this.constrainToEventBounds = false,
+    this.cameraFitBounds,
     this.boundsFitPadding,
     this.illustratedMapOnly = false,
     this.attributionButtonPosition,
@@ -76,8 +79,11 @@ class EventMapWidget extends StatefulWidget {
   final void Function(MapVertex vertex)? onVertexTapped;
   final void Function(MapVertex vertex, LatLng coordinate)? onVertexMoved;
   final void Function(MapLibreMapController controller)? onMapCreated;
+  final VoidCallback? onCameraMove;
   /// When true, pan/zoom is limited to [EventMeta.bounds] and the camera fits that area.
   final bool constrainToEventBounds;
+  /// When set, initial camera + fit use these bounds instead of [EventMeta.navigationBounds].
+  final MapBounds? cameraFitBounds;
   final EdgeInsets? boundsFitPadding;
   /// Skjul OSM og vis kun illustreret kort (fuld opacity) — til gæster.
   final bool illustratedMapOnly;
@@ -127,10 +133,20 @@ class _EventMapWidgetState extends State<EventMapWidget> {
       widget.data.event.navigationBounds != null &&
       widget.data.event.navigationBounds!.isValid;
 
+  MapBounds? get _cameraFitBounds {
+    final explicit = widget.cameraFitBounds;
+    if (explicit != null && explicit.isValid) return explicit;
+    if (!_useEventBounds) return null;
+    return widget.data.event.navigationBounds;
+  }
+
   bool get _useIllustratedBasemap =>
       widget.showIllustratedBasemap && widget.data.event.hasIllustratedBasemap;
 
-  bool get _useBlankMapStyle => widget.illustratedMapOnly && _useIllustratedBasemap;
+  /// Brug neutral baggrund for gæstekort med tegning — undgå stilskift på web
+  /// når overlay er loadet (det nulstiller ellers kortet).
+  bool get _useBlankMapStyle =>
+      widget.illustratedMapOnly && _useIllustratedBasemap;
 
   @override
   void didUpdateWidget(covariant EventMapWidget oldWidget) {
@@ -186,6 +202,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     if (oldWidget.poiDraggable != widget.poiDraggable ||
         oldWidget.vertexDraggable != widget.vertexDraggable) {
       _updateDragListener();
+    }
+    if (oldWidget.cameraFitBounds != widget.cameraFitBounds) {
+      unawaited(_fitToEventBounds());
     }
     if (oldWidget.myLocationTrackingMode != widget.myLocationTrackingMode &&
         widget.myLocationEnabled) {
@@ -680,6 +699,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     }
     if (!_isActive) return;
     _loadedBasemapUrl = url;
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _addBasemapLayer(
@@ -818,22 +840,34 @@ class _EventMapWidgetState extends State<EventMapWidget> {
 
   Future<void> _fitToEventBounds() async {
     final controller = _controller;
-    final bounds = widget.data.event.navigationBounds;
-    if (!_useEventBounds || controller == null || bounds == null) return;
+    final bounds = _cameraFitBounds;
+    if (!_isActive || bounds == null || controller == null) return;
 
     final padding = widget.boundsFitPadding ?? EdgeInsets.zero;
-    await controller.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        bounds.toLatLngBounds(),
-        left: padding.left,
-        top: padding.top,
-        right: padding.right,
-        bottom: padding.bottom,
-      ),
-    );
+    try {
+      await controller.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          bounds.toLatLngBounds(),
+          left: padding.left,
+          top: padding.top,
+          right: padding.right,
+          bottom: padding.bottom,
+        ),
+      );
+    } on Object {
+      // Native map may be gone after navigation pop.
+    }
   }
 
   CameraPosition _initialCamera() {
+    final fitBounds = _cameraFitBounds;
+    if (fitBounds != null) {
+      return CameraPosition(
+        target: LatLng(fitBounds.centerLat, fitBounds.centerLng),
+        zoom: fitBounds.estimateInitialZoom(),
+      );
+    }
+
     if (_useEventBounds) {
       final bounds = widget.data.event.navigationBounds!;
       return CameraPosition(
@@ -899,6 +933,11 @@ class _EventMapWidgetState extends State<EventMapWidget> {
         ? navigationBounds.toCameraTargetBounds()
         : CameraTargetBounds.unbounded;
 
+    final locationEnabled = widget.myLocationEnabled;
+    final locationRenderMode = locationEnabled
+        ? widget.myLocationRenderMode
+        : MyLocationRenderMode.normal;
+
     return Stack(
       children: [
         MapLibreMap(
@@ -913,9 +952,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               widget.attributionButtonPosition ?? AttributionButtonPosition.topLeft,
           attributionButtonMargins: widget.attributionButtonMargins,
           featureTapsTriggersMapClick: widget.onMapTap != null,
-          myLocationEnabled: widget.myLocationEnabled,
-          myLocationRenderMode: widget.myLocationRenderMode,
-          myLocationTrackingMode: widget.myLocationEnabled
+          myLocationEnabled: locationEnabled,
+          myLocationRenderMode: locationRenderMode,
+          myLocationTrackingMode: locationEnabled
               ? widget.myLocationTrackingMode
               : MyLocationTrackingMode.none,
           onMapCreated: (controller) {
@@ -935,7 +974,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               _basemapReady = false;
               _loadedBasemapUrl = null;
               await _syncMapContent();
-              if (_useEventBounds && _isActive) {
+              if (_cameraFitBounds != null && _isActive) {
                 await _fitToEventBounds();
               }
               if (_isActive) {
@@ -946,7 +985,10 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               // Ignore sync failures when map is torn down.
             }
           },
-          onCameraMove: (_) => _updateOverlayPositions(),
+          onCameraMove: (_) {
+            _updateOverlayPositions();
+            widget.onCameraMove?.call();
+          },
           onMapIdle: _updateOverlayPositions,
           onMapClick: widget.onMapTap == null
               ? null

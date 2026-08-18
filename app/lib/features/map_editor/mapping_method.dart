@@ -14,7 +14,7 @@ enum EditorSection {
   routes('Ruter'),
   places('Steder'),
   map('Kort'),
-  audioTour('Lydvandringer'),
+  audioTour('Lyd'),
   treasureHunt('Skattejagt');
 
   const EditorSection(this.label);
@@ -24,6 +24,8 @@ enum EditorSection {
 
 /// Hvad et tryk på kortet gør i editoren.
 enum EditorMode {
+  /// Ruter-fane uden aktivt værktøj valgt.
+  routesIdle,
   drawPath,
   addPlace,
   editPlace,

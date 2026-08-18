@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../data/models/audio_tour.dart';
 import '../../data/models/event_map_data.dart';
 import 'visitor_experience.dart';
-import 'visitor_map_screen.dart';
 import 'visitor_audio_tour_picker_screen.dart';
+import 'visitor_map_screen.dart';
+
+typedef VisitorExperienceSelected = void Function(
+  VisitorExperience experience, {
+  AudioTourConfig? audioTour,
+});
 
 class VisitorExperiencePickerScreen extends StatelessWidget {
   const VisitorExperiencePickerScreen({
@@ -11,16 +17,22 @@ class VisitorExperiencePickerScreen extends StatelessWidget {
     required this.mapData,
     this.initialSearch,
     this.embed = false,
+    this.onExperienceSelected,
   });
 
   final EventMapData mapData;
   final String? initialSearch;
   final bool embed;
+  final VisitorExperienceSelected? onExperienceSelected;
 
   void _openExperience(BuildContext context, VisitorExperience experience) {
     if (experience == VisitorExperience.audioTour) {
       final tours = mapData.audioTourCatalog.configuredTours;
       if (tours.length > 1) {
+        if (onExperienceSelected != null) {
+          onExperienceSelected!(experience);
+          return;
+        }
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -29,17 +41,24 @@ class VisitorExperiencePickerScreen extends StatelessWidget {
         );
         return;
       }
-      Navigator.pushReplacement(
+      _complete(
         context,
-        MaterialPageRoute(
-          builder: (context) => VisitorMapScreen(
-            mapData: mapData,
-            experience: experience,
-            audioTourConfig: tours.isNotEmpty ? tours.first : null,
-            embed: embed,
-          ),
-        ),
+        experience,
+        audioTour: tours.isNotEmpty ? tours.first : null,
       );
+      return;
+    }
+
+    _complete(context, experience);
+  }
+
+  void _complete(
+    BuildContext context,
+    VisitorExperience experience, {
+    AudioTourConfig? audioTour,
+  }) {
+    if (onExperienceSelected != null) {
+      onExperienceSelected!(experience, audioTour: audioTour);
       return;
     }
 
@@ -49,6 +68,7 @@ class VisitorExperiencePickerScreen extends StatelessWidget {
         builder: (context) => VisitorMapScreen(
           mapData: mapData,
           experience: experience,
+          audioTourConfig: audioTour,
           initialSearch: experience == VisitorExperience.search ? initialSearch : null,
           embed: embed,
         ),

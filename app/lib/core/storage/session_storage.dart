@@ -30,6 +30,22 @@ class OrganizerSession {
 
 class SessionStorage {
   static const _sessionsKey = 'organizer_sessions';
+  static const _selectedOrgKey = 'selected_organization_id';
+
+  Future<String?> loadSelectedOrganizationId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_selectedOrgKey);
+  }
+
+  Future<void> saveSelectedOrganizationId(String organizationId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_selectedOrgKey, organizationId);
+  }
+
+  Future<void> clearSelectedOrganizationId() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_selectedOrgKey);
+  }
 
   Future<List<OrganizerSession>> loadSessions() async {
     final prefs = await SharedPreferences.getInstance();

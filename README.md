@@ -32,12 +32,20 @@ supabase db push
 
 ## App (Flutter)
 
+Flutter-projektet ligger i mappen **`app/`** — kør altid kommandoer derfra (eller brug `./run.sh` fra repo-roden).
+
 Kopiér `app/assets/env.json.example` til `app/assets/env.json` og indsæt anon key.
 
 ```bash
 cd app
 flutter pub get
 flutter run
+```
+
+Fra repo-roden:
+
+```bash
+./run.sh
 ```
 
 ## Etaper
