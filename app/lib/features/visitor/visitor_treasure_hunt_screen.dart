@@ -18,6 +18,8 @@ import 'widgets/poi_audio_player.dart';
 import 'widgets/poi_media_viewer.dart';
 import 'widgets/visitor_map_controls.dart';
 import 'widgets/visitor_turn_banner.dart';
+import 'widgets/route_map_navigation_camera.dart';
+import 'widgets/visitor_recenter_chip.dart';
 
 /// Besøgskort med kun skattejagt — navigation følger officielle + jagtstier.
 class VisitorTreasureHuntScreen extends StatefulWidget {
@@ -46,6 +48,9 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
   ll.LatLng? _userLocation;
   TreasureHuntPost? _targetPost;
   var _isNavigating = false;
+  var _mapFollowing = true;
+  var _programmaticCameraMove = false;
+  Position? _lastPosition;
   List<ll.LatLng> _routePoints = [];
   List<RouteManeuver> _maneuvers = const [];
   NavigationInstruction? _instruction;
@@ -102,6 +107,7 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
     ).listen(
       (position) {
         if (!mounted) return;
+        _lastPosition = position;
         setState(() {
           _userLocation = ll.LatLng(position.latitude, position.longitude);
         });
@@ -146,44 +152,77 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
 
   void _updateTurnByTurn(Position position) {
     if (_routePoints.length < 2 || _maneuvers.isEmpty) return;
+    final heading = position.heading >= 0 ? position.heading : null;
     final instruction = buildNavigationInstruction(
       route: _routePoints,
       maneuvers: _maneuvers,
       lat: position.latitude,
       lng: position.longitude,
+      userHeading: heading,
     );
     if (!mounted) return;
     setState(() => _instruction = instruction);
+    if (_mapFollowing && instruction != null) {
+      unawaited(_updateNavigationCamera(position, instruction));
+    }
+  }
+
+  Future<void> _updateNavigationCamera(
+    Position position,
+    NavigationInstruction instruction,
+  ) async {
+    await RouteMapNavigationCamera.animateToInstruction(
+      controller: _mapController,
+      position: position,
+      instruction: instruction,
+      setProgrammaticFlag: (value) => _programmaticCameraMove = value,
+    );
+  }
+
+  void _onMapCameraMoved() {
+    if (_programmaticCameraMove || !mounted) return;
+    if (_isNavigating && _mapFollowing) {
+      setState(() => _mapFollowing = false);
+    }
+  }
+
+  void _onCameraTrackingDismissed() {
+    if (!mounted) return;
+    if (_isNavigating && _mapFollowing) {
+      setState(() => _mapFollowing = false);
+    }
   }
 
   void _beginNavigationTo(TreasureHuntPost post) {
     setState(() {
       _targetPost = post;
       _isNavigating = true;
+      _mapFollowing = true;
       _instruction = null;
     });
     final location = _userLocation;
     if (location != null) {
-      _recomputeRoute(
-        Position(
-          latitude: location.latitude,
-          longitude: location.longitude,
-          timestamp: DateTime.now(),
-          accuracy: 0,
-          altitude: 0,
-          heading: 0,
-          speed: 0,
-          speedAccuracy: 0,
-          altitudeAccuracy: 0,
-          headingAccuracy: 0,
-        ),
+      final position = Position(
+        latitude: location.latitude,
+        longitude: location.longitude,
+        timestamp: DateTime.now(),
+        accuracy: 0,
+        altitude: 0,
+        heading: _lastPosition?.heading ?? 0,
+        speed: 0,
+        speedAccuracy: 0,
+        altitudeAccuracy: 0,
+        headingAccuracy: 0,
       );
+      _recomputeRoute(position);
+      _updateTurnByTurn(position);
     }
   }
 
   void _stopNavigation() {
     setState(() {
       _isNavigating = false;
+      _mapFollowing = true;
       _instruction = null;
       _routePoints = [];
       _maneuvers = const [];
@@ -195,12 +234,41 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
     final location = _userLocation;
     if (controller == null || location == null || !mounted) return;
 
+    if (_isNavigating) {
+      setState(() => _mapFollowing = true);
+      final position = _lastPosition ??
+          Position(
+            latitude: location.latitude,
+            longitude: location.longitude,
+            timestamp: DateTime.now(),
+            accuracy: 0,
+            altitude: 0,
+            heading: 0,
+            speed: 0,
+            speedAccuracy: 0,
+            altitudeAccuracy: 0,
+            headingAccuracy: 0,
+          );
+      if (_instruction != null) {
+        await _updateNavigationCamera(position, _instruction!);
+      } else {
+        await RouteMapNavigationCamera.animateToUser(
+          controller: controller,
+          lat: location.latitude,
+          lng: location.longitude,
+          setProgrammaticFlag: (value) => _programmaticCameraMove = value,
+        );
+      }
+      return;
+    }
+
     try {
-      await controller.animateCamera(
-        CameraUpdate.newLatLngZoom(
-          ml.LatLng(location.latitude, location.longitude),
-          17,
-        ),
+      await RouteMapNavigationCamera.animateToUser(
+        controller: controller,
+        lat: location.latitude,
+        lng: location.longitude,
+        setProgrammaticFlag: (value) => _programmaticCameraMove = value,
+        zoom: 17,
       );
     } on Object {
       // Native map may be gone after leaving the screen.
@@ -308,9 +376,9 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
             overlayEdges: _network.huntEdges,
             myLocationEnabled: true,
             myLocationRenderMode: MyLocationRenderMode.compass,
-            myLocationTrackingMode: _isNavigating
-                ? MyLocationTrackingMode.trackingCompass
-                : MyLocationTrackingMode.none,
+            myLocationTrackingMode: MyLocationTrackingMode.none,
+            onCameraMove: _onMapCameraMoved,
+            onCameraTrackingDismissed: _onCameraTrackingDismissed,
             onMapCreated: (controller) {
               _mapController = controller;
               setState(() {});
@@ -337,6 +405,11 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
                 destinationLabel: _targetPost!.displayTitle,
                 onStop: _stopNavigation,
               ),
+            ),
+          if (_isNavigating && !_mapFollowing)
+            VisitorRecenterChip(
+              onTap: _recenterOnUser,
+              bottom: 80,
             ),
           if (_status != null && !_isNavigating)
             Positioned(

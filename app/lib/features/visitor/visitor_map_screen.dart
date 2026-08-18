@@ -32,6 +32,8 @@ import 'widgets/visitor_poi_topic_sheets.dart';
 import 'widgets/visitor_search_suggestions.dart';
 import 'widgets/visitor_turn_banner.dart';
 import 'widgets/visitor_audio_tour_bar.dart';
+import 'widgets/route_map_navigation_camera.dart';
+import 'widgets/visitor_recenter_chip.dart';
 import 'audio_tour_guidance_controller.dart';
 import 'visitor_experience.dart';
 import 'visitor_experience_picker_screen.dart';
@@ -90,6 +92,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   Set<PoiTopic> _activeTopics = PoiTopic.values.toSet();
   bool _gpsReady = false;
   bool _audioTourMapFollowing = true;
+  bool _searchMapFollowing = true;
   bool _programmaticCameraMove = false;
   NavigationInstruction? _audioTourInstruction;
   List<RouteManeuver> _audioTourManeuvers = const [];
@@ -220,14 +223,25 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   }
 
   void _onMapCameraMoved() {
-    if (_programmaticCameraMove) return;
-    if (!_audioTourGuiding || !_audioTourMapFollowing || !mounted) return;
-    setState(() => _audioTourMapFollowing = false);
+    if (_programmaticCameraMove || !mounted) return;
+    if (_audioTourGuiding && _audioTourMapFollowing) {
+      setState(() => _audioTourMapFollowing = false);
+      return;
+    }
+    if (_isNavigating && _searchMapFollowing) {
+      setState(() => _searchMapFollowing = false);
+    }
   }
 
-  void _onAudioTourTrackingDismissed() {
-    if (!_audioTourGuiding || !mounted) return;
-    setState(() => _audioTourMapFollowing = false);
+  void _onCameraTrackingDismissed() {
+    if (!mounted) return;
+    if (_audioTourGuiding && _audioTourMapFollowing) {
+      setState(() => _audioTourMapFollowing = false);
+      return;
+    }
+    if (_isNavigating && _searchMapFollowing) {
+      setState(() => _searchMapFollowing = false);
+    }
   }
 
   @override
@@ -471,35 +485,22 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
 
     if (!mounted) return;
     setState(() => _instruction = instruction);
-    _updateNavigationCamera(position, instruction);
+    if (_searchMapFollowing) {
+      unawaited(_updateNavigationCamera(position, instruction));
+    }
   }
 
   Future<void> _updateNavigationCamera(
     Position position,
     NavigationInstruction? instruction,
   ) async {
-    final controller = _mapController;
-    if (controller == null || instruction == null || !mounted) return;
-
-    try {
-      _programmaticCameraMove = true;
-      await controller.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: LatLng(position.latitude, position.longitude),
-            zoom: 17.5,
-            bearing: instruction.mapBearing,
-            tilt: 0,
-          ),
-        ),
-      );
-    } on Object {
-      // Native map may be gone after leaving the screen.
-    } finally {
-      Future<void>.delayed(const Duration(milliseconds: 350), () {
-        _programmaticCameraMove = false;
-      });
-    }
+    if (instruction == null || !mounted) return;
+    await RouteMapNavigationCamera.animateToInstruction(
+      controller: _mapController,
+      position: position,
+      instruction: instruction,
+      setProgrammaticFlag: (value) => _programmaticCameraMove = value,
+    );
   }
 
   void _submitSearch() {
@@ -552,7 +553,10 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
   void _beginNavigation() {
     if (!_canStartNavigation) return;
 
-    setState(() => _isNavigating = true);
+    setState(() {
+      _isNavigating = true;
+      _searchMapFollowing = true;
+    });
     unawaited(_startNavigationTurnByTurn());
   }
 
@@ -732,32 +736,41 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
         if (_audioTourInstruction != null) {
           await _updateNavigationCamera(position, _audioTourInstruction);
         } else {
-          _programmaticCameraMove = true;
-          await controller.animateCamera(
-            CameraUpdate.newCameraPosition(
-              CameraPosition(
-                target: LatLng(location.latitude, location.longitude),
-                zoom: 17.5,
-              ),
-            ),
+          await RouteMapNavigationCamera.animateToUser(
+            controller: controller,
+            lat: location.latitude,
+            lng: location.longitude,
+            setProgrammaticFlag: (value) => _programmaticCameraMove = value,
           );
-          Future<void>.delayed(const Duration(milliseconds: 350), () {
-            _programmaticCameraMove = false;
-          });
         }
         return;
       }
 
-      if (_isNavigating && _instruction != null) {
-        await controller.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(location.latitude, location.longitude),
-              zoom: 17.5,
-              bearing: _instruction!.mapBearing,
-            ),
-          ),
-        );
+      if (_isNavigating) {
+        setState(() => _searchMapFollowing = true);
+        final position = _lastPosition ??
+            Position(
+              latitude: location.latitude,
+              longitude: location.longitude,
+              timestamp: DateTime.now(),
+              accuracy: 0,
+              altitude: 0,
+              heading: 0,
+              speed: 0,
+              speedAccuracy: 0,
+              altitudeAccuracy: 0,
+              headingAccuracy: 0,
+            );
+        if (_instruction != null) {
+          await _updateNavigationCamera(position, _instruction);
+        } else {
+          await RouteMapNavigationCamera.animateToUser(
+            controller: controller,
+            lat: location.latitude,
+            lng: location.longitude,
+            setProgrammaticFlag: (value) => _programmaticCameraMove = value,
+          );
+        }
         return;
       }
 
@@ -1007,9 +1020,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       myLocationRenderMode: !widget.organizerPreview
                           ? MyLocationRenderMode.compass
                           : MyLocationRenderMode.normal,
-                      myLocationTrackingMode: !widget.organizerPreview && _isNavigating
-                          ? MyLocationTrackingMode.trackingCompass
-                          : MyLocationTrackingMode.none,
+                      myLocationTrackingMode: MyLocationTrackingMode.none,
                       showPathVertices: false,
                       showEventPaths: !hasIllustrated,
                       showIllustratedBasemap: true,
@@ -1022,9 +1033,7 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       onPoiTapped: _handlePoiTap,
                       onMapCreated: (c) => _mapController = c,
                       onCameraMove: _onMapCameraMoved,
-                      onCameraTrackingDismissed: _audioTourGuiding
-                          ? _onAudioTourTrackingDismissed
-                          : null,
+                      onCameraTrackingDismissed: _onCameraTrackingDismissed,
                       attributionButtonPosition: _isSearchMode
                           ? AttributionButtonPosition.topRight
                           : AttributionButtonPosition.bottomLeft,
@@ -1318,7 +1327,6 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       ),
                     ),
                   if (_audioTourGuiding &&
-                      _audioTourMapFollowing &&
                       _audioTourInstruction != null &&
                       audioTour?.currentTargetPoi != null)
                     Positioned(
@@ -1332,45 +1340,14 @@ class _VisitorMapScreenState extends State<VisitorMapScreen> {
                       ),
                     ),
                   if (_audioTourGuiding && !_audioTourMapFollowing)
-                    Positioned(
-                      left: 16,
-                      right: 16,
+                    VisitorRecenterChip(
+                      onTap: _recenterOnUser,
                       bottom: 168,
-                      child: Center(
-                        child: Material(
-                          elevation: 3,
-                          shadowColor: Colors.black26,
-                          borderRadius: BorderRadius.circular(24),
-                          color: Colors.white,
-                          child: InkWell(
-                            onTap: _recenterOnUser,
-                            borderRadius: BorderRadius.circular(24),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.navigation,
-                                    size: 18,
-                                    color: Theme.of(context).colorScheme.primary,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Centrér igen',
-                                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
+                    ),
+                  if (_isNavigating && !_searchMapFollowing)
+                    VisitorRecenterChip(
+                      onTap: _recenterOnUser,
+                      bottom: 16,
                     ),
                   if (_showTopicFilters)
                     Positioned(
