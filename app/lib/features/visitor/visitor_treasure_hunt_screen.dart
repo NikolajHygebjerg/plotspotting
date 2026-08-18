@@ -381,6 +381,7 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final hasIllustrated = widget.mapData.event.hasIllustratedBasemap;
     return Scaffold(
       appBar: widget.embed
           ? null
@@ -394,7 +395,8 @@ class _VisitorTreasureHuntScreenState extends State<VisitorTreasureHuntScreen> {
             routePoints: _routePoints,
             routeDotted: _isNavigating,
             showIllustratedBasemap: true,
-            showEventPaths: true,
+            illustratedMapOnly: hasIllustrated,
+            showEventPaths: !hasIllustrated,
             showPathVertices: false,
             showPoiMarkers: false,
             overlayEdges: _network.huntEdges,
