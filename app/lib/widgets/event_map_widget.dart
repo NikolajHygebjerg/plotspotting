@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -147,8 +148,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
 
   /// Brug neutral baggrund for gæstekort med tegning — undgå stilskift på web
   /// når overlay er loadet (det nulstiller ellers kortet).
+  /// På web bruges OSM under overlayet — addImageSource virker ikke i browseren.
   bool get _useBlankMapStyle =>
-      widget.illustratedMapOnly && _useIllustratedBasemap;
+      widget.illustratedMapOnly && _useIllustratedBasemap && !kIsWeb;
 
   @override
   void didUpdateWidget(covariant EventMapWidget oldWidget) {
@@ -676,10 +678,25 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     final url = event.basemapUrl!;
     if (_basemapReady && _loadedBasemapUrl == url) return;
 
+    final quad = event.bounds!.toLatLngQuad();
+
+    if (kIsWeb) {
+      await _removeBasemapIfPresent();
+      try {
+        await _addBasemapLayerWeb(controller, url, quad);
+      } on Object {
+        // Image source unsupported or blocked — OSM remains visible underneath.
+        return;
+      }
+      if (!_isActive) return;
+      _loadedBasemapUrl = url;
+      if (mounted) setState(() {});
+      return;
+    }
+
     final response = await http.get(Uri.parse(url));
     if (!_isActive || response.statusCode != 200) return;
 
-    final quad = event.bounds!.toLatLngQuad();
     final bytes = response.bodyBytes;
 
     if (_basemapReady) {
@@ -687,12 +704,12 @@ class _EventMapWidgetState extends State<EventMapWidget> {
         await controller.updateImageSource(_basemapSourceId, bytes, quad);
       } on Object {
         await _removeBasemapIfPresent();
-        await _addBasemapLayer(controller, bytes, quad);
+        await _addBasemapLayerNative(controller, bytes, quad);
       }
     } else {
       await _removeBasemapIfPresent();
       try {
-        await _addBasemapLayer(controller, bytes, quad);
+        await _addBasemapLayerNative(controller, bytes, quad);
       } on PlatformException catch (error) {
         if (error.code == 'duplicateSource') {
           await controller.updateImageSource(_basemapSourceId, bytes, quad);
@@ -719,7 +736,36 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     }
   }
 
-  Future<void> _addBasemapLayer(
+  List<List<double>> _imageSourceCoordinates(LatLngQuad quad) => [
+        [quad.topLeft.longitude, quad.topLeft.latitude],
+        [quad.topRight.longitude, quad.topRight.latitude],
+        [quad.bottomRight.longitude, quad.bottomRight.latitude],
+        [quad.bottomLeft.longitude, quad.bottomLeft.latitude],
+      ];
+
+  Future<void> _addBasemapLayerWeb(
+    MapLibreMapController controller,
+    String url,
+    LatLngQuad quad,
+  ) async {
+    await controller.addSource(
+      _basemapSourceId,
+      ImageSourceProperties(
+        url: url,
+        coordinates: _imageSourceCoordinates(quad),
+      ),
+    );
+
+    await controller.addLayer(
+      _basemapSourceId,
+      _basemapLayerId,
+      const RasterLayerProperties(),
+      belowLayerId: _useBlankMapStyle ? null : _basemapBelowLayerId,
+    );
+    _basemapReady = true;
+  }
+
+  Future<void> _addBasemapLayerNative(
     MapLibreMapController controller,
     Uint8List bytes,
     LatLngQuad quad,
