@@ -152,5 +152,34 @@ void main() {
       expect(poi.occupants, [const PoiOccupant(name: 'Bo')]);
       expect(poi.availableTopics, contains(PoiTopic.address));
     });
+
+    test('fromJson coerces numeric house_number values', () {
+      final poi = MapPoi.fromJson({
+        'id': '3',
+        'name': 'Sted',
+        'category': 'home',
+        'lat': 56.36,
+        'lng': 10.52,
+        'metadata': {'house_number': 36, 'occupants': [{'name': 'Laila'}]},
+      });
+
+      expect(poi.houseNumber, '36');
+      expect(poi.availableTopics, contains(PoiTopic.address));
+      expect(poi.availableTopics, contains(PoiTopic.name));
+    });
+
+    test('resolvedHouseNumber can be inferred from display name', () {
+      const poi = MapPoi(
+        id: '4',
+        name: '36 · Laila',
+        category: 'home',
+        lat: 56.36,
+        lng: 10.52,
+      );
+
+      expect(poi.resolvedHouseNumber, '36');
+      expect(poi.hasAddressTopic, isTrue);
+      expect(poi.hasNameTopic, isTrue);
+    });
   });
 }
