@@ -50,6 +50,8 @@ class AudioTourGuidanceController extends ChangeNotifier {
   double _approachMeters = 0;
   String? _error;
   AudioTourWanderClip? _activeWander;
+  double? _lastLat;
+  double? _lastLng;
 
   AudioTourPhase get phase => _phase;
   int get poiStopIndex => _poiStopIndex;
@@ -78,10 +80,20 @@ class AudioTourGuidanceController extends ChangeNotifier {
 
   bool get canPlayStop {
     if (_phase != AudioTourPhase.readyAtStop) return false;
-    return _currentStopAudio != null;
+    return currentStopAudio != null;
   }
 
-  PoiMedia? get _currentStopAudio {
+  bool get canGoToNextStop =>
+      _phase != AudioTourPhase.completed &&
+      (_phase == AudioTourPhase.readyAtStop ||
+          _phase == AudioTourPhase.playingStop ||
+          _phase == AudioTourPhase.playingWander);
+
+  bool get isGuidingToStop =>
+      _phase == AudioTourPhase.navigateToStop ||
+      _phase == AudioTourPhase.walkingToNext;
+
+  PoiMedia? get currentStopAudio {
     final poi = currentTargetPoi;
     if (poi == null) return null;
     final item = _config.poiItemAtStopIndex(_poiStopIndex);
@@ -126,11 +138,13 @@ class AudioTourGuidanceController extends ChangeNotifier {
   }
 
   void updateLocation(double lat, double lng) {
+    _lastLat = lat;
+    _lastLng = lng;
+
     final target = currentTargetPoi;
     if (target == null) return;
 
-    if (_phase == AudioTourPhase.navigateToStop ||
-        _phase == AudioTourPhase.walkingToNext) {
+    if (isGuidingToStop) {
       _recomputeRoute(lat, lng, target);
       final distanceToTarget = haversineMeters(lat, lng, target.lat, target.lng);
       if (distanceToTarget <= arrivalThresholdMeters) {
@@ -163,9 +177,50 @@ class AudioTourGuidanceController extends ChangeNotifier {
     _approachMeters = plan.approachMeters;
   }
 
+  Future<void> goToNextStop() async {
+    if (!canGoToNextStop) return;
+
+    await _player.stop();
+    _activeWander = null;
+    _error = null;
+
+    if (_phase == AudioTourPhase.playingWander) {
+      _phase = AudioTourPhase.walkingToNext;
+      _refreshGuidanceRoute();
+      notifyListeners();
+      return;
+    }
+
+    if (_poiStopIndex >= _config.poiStopIds.length - 1) {
+      _phase = AudioTourPhase.completed;
+      _routePoints = [];
+      _distanceMeters = 0;
+      _approachMeters = 0;
+      notifyListeners();
+      return;
+    }
+
+    _poiStopIndex++;
+    _phase = AudioTourPhase.walkingToNext;
+    _activeWander = wanderEnRoute;
+    _refreshGuidanceRoute();
+    notifyListeners();
+  }
+
+  void _refreshGuidanceRoute() {
+    final target = currentTargetPoi;
+    if (target == null || _lastLat == null || _lastLng == null) {
+      _routePoints = [];
+      _distanceMeters = 0;
+      _approachMeters = 0;
+      return;
+    }
+    _recomputeRoute(_lastLat!, _lastLng!, target);
+  }
+
   Future<void> playCurrentStop() async {
     final poi = currentTargetPoi;
-    final audio = _currentStopAudio;
+    final audio = currentStopAudio;
     if (poi == null || audio == null) {
       _error = 'Intet lydklip for dette stop';
       notifyListeners();
