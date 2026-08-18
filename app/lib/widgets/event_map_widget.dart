@@ -46,6 +46,7 @@ class EventMapWidget extends StatefulWidget {
     this.onMapCreated,
     this.onCameraMove,
     this.onCameraTrackingDismissed,
+    this.scrollGesturesEnabled = true,
     this.constrainToEventBounds = false,
     this.cameraFitBounds,
     this.boundsFitPadding,
@@ -82,6 +83,7 @@ class EventMapWidget extends StatefulWidget {
   final void Function(MapLibreMapController controller)? onMapCreated;
   final VoidCallback? onCameraMove;
   final VoidCallback? onCameraTrackingDismissed;
+  final bool scrollGesturesEnabled;
   /// When true, pan/zoom is limited to [EventMeta.bounds] and the camera fits that area.
   final bool constrainToEventBounds;
   /// When set, initial camera + fit use these bounds instead of [EventMeta.navigationBounds].
@@ -963,6 +965,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
           cameraTargetBounds: cameraTargetBounds,
           compassEnabled: false,
           trackCameraPosition: _trackCameraForOverlays,
+          scrollGesturesEnabled: widget.scrollGesturesEnabled,
           attributionButtonPosition:
               widget.attributionButtonPosition ?? AttributionButtonPosition.topLeft,
           attributionButtonMargins: widget.attributionButtonMargins,

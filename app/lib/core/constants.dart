@@ -41,6 +41,8 @@ abstract final class AppConstants {
   static const poiPathAccessMaxMeters = 200.0;
   /// Minimum GPS movement before a new path point is recorded while mapping.
   static const recordingMinStepMeters = 5.0;
+  /// Minimum distance between frihåndstegningspunkter.
+  static const freehandMinStepMeters = 3.0;
   static const poiTapMaxMeters = 30.0;
   static const vertexTapMaxMeters = 7.0;
   /// Auto-snap til eksisterende stipunkt kun ved meget tæt placering.
