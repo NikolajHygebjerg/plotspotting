@@ -125,7 +125,7 @@ class _VisitorPoiTopicFilterDrawerState extends State<VisitorPoiTopicFilterDrawe
           ),
           const SizedBox(height: 4),
           Text(
-            'Tryk på et sted — kun valgte emner vises',
+            'Kun steder med valgte emner vises på kortet',
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: 10),
