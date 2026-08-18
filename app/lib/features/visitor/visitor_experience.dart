@@ -47,3 +47,10 @@ VisitorExperience defaultExperience(EventMapData data) {
   final options = availableExperiences(data);
   return options.isNotEmpty ? options.first : VisitorExperience.search;
 }
+
+/// Bruges til at nulstille gæst-preview når tilgængelige oplevelser ændrer sig.
+String visitorExperienceFingerprint(EventMapData data) {
+  final options = availableExperiences(data);
+  final tourIds = data.audioTourCatalog.configuredTours.map((tour) => tour.id).join(',');
+  return '${options.map((e) => e.name).join('|')}::$tourIds';
+}

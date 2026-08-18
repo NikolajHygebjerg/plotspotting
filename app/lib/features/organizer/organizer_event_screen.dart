@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../data/models/event_map_data.dart';
 import '../map_editor/map_editor_screen.dart';
 import '../map_editor/mapping_method.dart';
+import '../visitor/visitor_experience.dart';
 import 'organizer_guest_preview.dart';
 import 'organizer_shell.dart';
 
@@ -92,7 +93,10 @@ class _OrganizerEventScreenState extends State<OrganizerEventScreen> {
       body: IndexedStack(
         index: _isGuestView ? 0 : 1,
         children: [
-          OrganizerGuestPreview(data: _data),
+          OrganizerGuestPreview(
+            key: ValueKey(visitorExperienceFingerprint(_data)),
+            data: _data,
+          ),
           MapEditorScreen(
             key: _editorKey,
             eventId: widget.eventId,

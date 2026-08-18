@@ -9,7 +9,8 @@ import '../../data/repositories/organization_repository.dart';
 import '../account/user_account_screen.dart';
 import '../create_event/create_event_screen.dart';
 import '../map_setup/map_setup_flow.dart';
-import '../visitor/open_published_event_screen.dart';
+import '../organizer/organizer_guest_preview.dart';
+import '../visitor/visitor_experience.dart';
 import '../../core/storage/organizer_session_persistence.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -110,15 +111,28 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _openPublishedEvent(String slug) async {
-    final normalized = slug.trim().toLowerCase();
-    if (normalized.isEmpty) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => OpenPublishedEventScreen(slug: normalized),
-      ),
-    );
+  Future<void> _openVisitorPreview(OrganizationEventSummary event) async {
+    try {
+      final data = await _repository.loadForEdit(eventId: event.id);
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => Scaffold(
+            appBar: AppBar(title: Text(data.event.name)),
+            body: OrganizerGuestPreview(
+              key: ValueKey(visitorExperienceFingerprint(data)),
+              data: data,
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kunne ikke åbne gæstevisning: $error')),
+      );
+    }
   }
 
   Future<void> _deleteOrgEvent(OrganizationEventSummary event) async {
@@ -151,11 +165,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Widget _visitorIconButton(String slug) {
+  Widget _visitorIconButton(OrganizationEventSummary event) {
     return IconButton(
       tooltip: 'Se som besøgende',
       icon: const Icon(Icons.visibility_outlined),
-      onPressed: () => _openPublishedEvent(slug),
+      onPressed: () => _openVisitorPreview(event),
     );
   }
 
@@ -241,8 +255,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               : Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    if (event.isPublished && event.publicSlug != null)
-                                      _visitorIconButton(event.publicSlug!),
+                                    _visitorIconButton(event),
                                     IconButton(
                                       icon: Icon(
                                         Icons.delete_outline,
