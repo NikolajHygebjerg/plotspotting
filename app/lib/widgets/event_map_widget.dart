@@ -125,11 +125,23 @@ class _EventMapWidgetState extends State<EventMapWidget> {
   Circle? _connectionPointCircle;
   final _connectionPointCircles = <Circle>[];
   final _routeDotCircles = <Circle>[];
+  double? _cameraZoom;
+  int _poiZoomBucket = 0;
+
+  static const _osmBuildingLayerIds = ['building-3d', 'building'];
 
   bool get _useFlutterRouteOverlay =>
       _useBlankMapStyle && widget.routeDotted && widget.routePoints.length >= 2;
 
-  bool get _trackCameraForOverlays => _useFlutterRouteOverlay;
+  bool get _useZoomDependentPoiPins =>
+      _useIllustratedBasemap && widget.showPoiMarkers && widget.onPoiTapped != null;
+
+  bool get _trackCameraForOverlays =>
+      _useFlutterRouteOverlay || _useZoomDependentPoiPins;
+
+  bool get _poiOverviewMode =>
+      _useZoomDependentPoiPins &&
+      (_cameraZoom ?? AppConstants.defaultZoom) < AppConstants.poiDetailZoomThreshold;
 
   bool get _useEventBounds =>
       widget.constrainToEventBounds &&
@@ -587,27 +599,43 @@ class _EventMapWidgetState extends State<EventMapWidget> {
             ? '#D84315'
             : poi.markerColorHex;
 
+    final overviewPin = _poiOverviewMode && !isDestination && !selected;
     final pinRadius = isDestination
         ? 16.0
-        : isInteractive
-            ? (_useIllustratedBasemap ? 15.0 : 14.0)
-            : 8.0;
+        : selected
+            ? 13.0
+            : isInteractive
+                ? (_useIllustratedBasemap
+                    ? (overviewPin
+                        ? AppConstants.poiOverviewRadius
+                        : AppConstants.poiDetailRadius)
+                    : 14.0)
+                : 8.0;
     final pinOpacity = isDestination || selected
         ? 0.95
         : isInteractive
-            ? (_useIllustratedBasemap ? 0.92 : 0.25)
+            ? (_useIllustratedBasemap
+                ? (overviewPin ? 0.5 : 0.88)
+                : 0.25)
             : 0.25;
+    final strokeWidth = overviewPin
+        ? 1.0
+        : isInteractive
+            ? (isDestination || selected ? 3.0 : 2.5)
+            : 2.5;
     final circle = await controller.addCircle(
       CircleOptions(
         geometry: LatLng(poi.lat, poi.lng),
         circleRadius: pinRadius,
         circleColor: pinColor,
         circleOpacity: pinOpacity,
-        circleStrokeWidth: isInteractive ? 3.5 : 2.5,
+        circleStrokeWidth: strokeWidth,
         circleStrokeColor: '#FFFFFF',
       ),
     );
     _poiCircles[poi.id] = circle;
+
+    if (overviewPin) return;
 
     final pinLabel = poi.mapPinLabel.trim();
     final showHouseLabel = _useIllustratedBasemap &&
@@ -622,15 +650,46 @@ class _EventMapWidgetState extends State<EventMapWidget> {
         fontNames: AppConstants.poiMapFontStack,
         textSize: isDestination
             ? 24
-            : (isInteractive ? (_useIllustratedBasemap ? 14 : 22) : 16),
+            : (isInteractive ? (_useIllustratedBasemap ? 13 : 22) : 16),
         textColor: '#FFFFFF',
         textHaloColor: pinColor,
-        textHaloWidth: isInteractive ? 2.4 : 1.6,
+        textHaloWidth: isInteractive ? 2.2 : 1.6,
         zIndex: 20,
         draggable: widget.poiDraggable,
       ),
     );
     _poiSymbols[poi.id] = symbol;
+  }
+
+  Future<void> _hideOsmBuildingLayers() async {
+    if (!_useIllustratedBasemap || _useBlankMapStyle) return;
+    final controller = _controller;
+    if (controller == null) return;
+
+    for (final layerId in _osmBuildingLayerIds) {
+      try {
+        await controller.setLayerVisibility(layerId, false);
+      } on Object {
+        // Layer may not exist in all styles.
+      }
+    }
+  }
+
+  void _onCameraZoomChanged(double zoom) {
+    if (!_useZoomDependentPoiPins) return;
+
+    _cameraZoom = zoom;
+    final bucket = zoom >= AppConstants.poiDetailZoomThreshold ? 1 : 0;
+    if (_poiZoomBucket == bucket) return;
+    _poiZoomBucket = bucket;
+    unawaited(_refreshAllPoiAnnotations());
+  }
+
+  Future<void> _refreshAllPoiAnnotations() async {
+    final ids = List<String>.from(_poiCircles.keys);
+    for (final id in ids) {
+      await _refreshPoiAnnotation(id);
+    }
   }
 
   Future<void> _removeBasemapIfPresent() async {
@@ -793,6 +852,7 @@ class _EventMapWidgetState extends State<EventMapWidget> {
     try {
       await _syncBasemap();
       if (!_isActive) return;
+      await _hideOsmBuildingLayers();
       await _syncAnnotations();
     } on Object {
       // Map may be disposed mid-sync after navigation pop.
@@ -1038,6 +1098,10 @@ class _EventMapWidgetState extends State<EventMapWidget> {
               if (_cameraFitBounds != null && _isActive) {
                 await _fitToEventBounds();
               }
+              final initialZoom = _controller?.cameraPosition?.zoom;
+              if (initialZoom != null) {
+                _onCameraZoomChanged(initialZoom);
+              }
               if (_isActive) {
                 await Future<void>.delayed(const Duration(milliseconds: 100));
               }
@@ -1047,8 +1111,9 @@ class _EventMapWidgetState extends State<EventMapWidget> {
             }
           },
           onCameraTrackingDismissed: widget.onCameraTrackingDismissed,
-          onCameraMove: (_) {
+          onCameraMove: (position) {
             _updateOverlayPositions();
+            _onCameraZoomChanged(position.zoom);
             widget.onCameraMove?.call();
           },
           onMapIdle: _updateOverlayPositions,

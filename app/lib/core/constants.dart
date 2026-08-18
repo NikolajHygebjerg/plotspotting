@@ -53,6 +53,10 @@ abstract final class AppConstants {
   static const routeLineColor = '#4285F4';
   static const routeDotColor = '#4285F4';
   static const defaultZoom = 16.0;
+  /// Illustrated guest maps: show small dots below this zoom, labels above.
+  static const poiDetailZoomThreshold = 16.5;
+  static const poiOverviewRadius = 3.5;
+  static const poiDetailRadius = 11.0;
   /// Gæster får ekstra plads at zoome/panorere uden for tegningens georef.
   static const areaViewBoundsExpansionFactor = 1.45;
   /// Neutral baggrund når gæster kun skal se det illustrerede kort.
